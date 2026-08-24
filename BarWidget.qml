@@ -65,9 +65,15 @@ BarWidget {
 
   function openPip(cameraName) {
     var target = String(cameraName || "")
-    if (target === "" ) target = defaultPipCamera()
-    if (target === "") return "no cameras"
-    if (service.cameraIndex(target) < 0) return "unknown camera: " + target
+    target = target === "" ? defaultPipCamera() : service.resolveCamera(target)
+
+    if (target === "") {
+      var asked = String(cameraName || "")
+      if (asked === "") return "no cameras"
+      var known = []
+      for (var i = 0; i < service.cameras.length; i++) known.push(service.cameras[i].name)
+      return "unknown camera: " + asked + " (known: " + known.join(", ") + ")"
+    }
 
     service.pipCamera = target
 
@@ -84,9 +90,9 @@ BarWidget {
   }
 
   function togglePip(cameraName) {
-    var target = String(cameraName || "")
+    var target = service.resolveCamera(String(cameraName || ""))
     if (root.pipOpen && (target === "" || target === service.pipCamera)) closePip()
-    else openPip(target)
+    else openPip(String(cameraName || ""))
   }
 
   function cyclePip() {

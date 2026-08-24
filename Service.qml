@@ -159,6 +159,29 @@ Item {
     return -1
   }
 
+  // Anything a person might reasonably type: the Frigate name, the label shown
+  // in the panel, either in any case. Returns the canonical Frigate name, or ""
+  // when nothing matches. Typing "Garage" for a camera Frigate calls "Garagem"
+  // should not be a silent no-op from a keybinding.
+  function resolveCamera(text) {
+    var wanted = String(text || "").trim()
+    if (wanted === "") return ""
+
+    var list = cameras
+    var i
+    for (i = 0; i < list.length; i++) {
+      if (list[i].name === wanted) return list[i].name
+    }
+
+    var lower = wanted.toLowerCase()
+    for (i = 0; i < list.length; i++) {
+      if (String(list[i].name).toLowerCase() === lower) return list[i].name
+      if (String(list[i].label).toLowerCase() === lower) return list[i].name
+    }
+
+    return ""
+  }
+
   // A camera Frigate has stopped pulling frames from is worth showing as
   // broken, rather than leaving a frozen snapshot that looks live.
   function cameraOnline(name) {
