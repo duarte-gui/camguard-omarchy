@@ -20,6 +20,7 @@ Item {
   property bool cameraOnline: true
   property var event: null
   property int nowTick: 0
+  property var zoneLabels: null
 
   property color foreground: Color.foreground
   property color urgent: Color.urgent
@@ -183,7 +184,7 @@ Item {
 
       Text {
         anchors.verticalCenter: parent.verticalCenter
-        text: Model.badgeText(tile.event, tile.nowTick)
+        text: Model.badgeText(tile.event, tile.nowTick, tile.zoneLabels)
         font.family: tile.fontFamily
         font.pixelSize: Style.font.caption
         color: "#ffffff"

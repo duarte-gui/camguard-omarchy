@@ -50,7 +50,11 @@ Panel {
       out.push({
         value: Model.zoneKey(list[i]),
         label: Model.zoneLabel(list[i]),
-        description: "Alert when something enters this zone"
+        // The generated key is worth showing here and nowhere else: it is what
+        // ends up in shell.json, so a hand-edit has something to match.
+        description: list[i].zone !== list[i].label
+          ? list[i].zone
+          : "Alert when something enters this zone"
       })
     }
     return out
@@ -350,6 +354,7 @@ Panel {
                 cameraOnline: root.service ? root.service.cameraOnline(modelData.name) : false
                 event: root.service ? root.service.latestEventFor(modelData.name) : null
                 nowTick: root.service ? root.service.tick : 0
+                zoneLabels: root.service ? root.service.zoneLabels : null
                 foreground: root.foreground
                 urgent: root.urgent
                 fontFamily: root.fontFamily
@@ -498,7 +503,7 @@ Panel {
 
                   Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: Model.eventHeadline(eventRow.modelData)
+                    text: Model.eventHeadline(eventRow.modelData, root.service ? root.service.zoneLabels : null)
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
                     color: root.foreground
@@ -509,7 +514,9 @@ Panel {
                   anchors.right: parent.right
                   anchors.verticalCenter: parent.verticalCenter
                   text: (root.service ? root.service.cameraLabel(eventRow.modelData.camera) : "")
-                    + " · " + Model.badgeText(eventRow.modelData, root.service ? root.service.tick : 0)
+                    + " · " + Model.badgeText(eventRow.modelData,
+                        root.service ? root.service.tick : 0,
+                        root.service ? root.service.zoneLabels : null)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   color: root.dim

@@ -26,7 +26,8 @@ function splitList(value) {
 
 // "Garage:den" -> "Garage · Den", for the settings list.
 function zoneLabel(entry) {
-  return titleCase(entry.camera) + " · " + titleCase(entry.zone)
+  var zone = entry.label ? entry.label : titleCase(entry.zone)
+  return titleCase(entry.camera) + " · " + zone
 }
 
 function zoneKey(entry) {
@@ -197,16 +198,44 @@ function parseLabels(spec) {
 
 // Every zone Frigate knows about, as "camera:zone" pairs — the placeholder the
 // settings field falls back to, and what the panel lists as available.
+//
+// A zone drawn in the Frigate UI gets a generated key like "zone_a6b95840" and
+// a `friendly_name` holding what the user actually called it. Showing the key
+// would be showing our own plumbing, so the friendly name wins wherever a zone
+// is displayed. The key stays the identifier: it is what events carry and what
+// the notify allowlist stores.
 function zonesFromConfig(config) {
   var cameras = (config && config.cameras) || {}
   var out = []
 
   for (var name in cameras) {
     var zones = (cameras[name] && cameras[name].zones) || {}
-    for (var zone in zones) out.push({ camera: name, zone: zone })
+    for (var zone in zones) {
+      var friendly = zones[zone] && zones[zone].friendly_name
+      out.push({
+        camera: name,
+        zone: zone,
+        label: friendly ? String(friendly) : titleCase(zone)
+      })
+    }
   }
 
   return out
+}
+
+// "camera:zone" -> friendly name, for the places that only have an event.
+function zoneLabelMap(zones) {
+  var map = ({})
+  for (var i = 0; i < (zones || []).length; i++) {
+    map[zoneKey(zones[i])] = zones[i].label
+  }
+  return map
+}
+
+function zoneDisplay(map, camera, zone) {
+  var key = String(camera || "") + ":" + String(zone || "")
+  if (map && map[key]) return map[key]
+  return titleCase(zone)
 }
 
 function relativeTime(epochSeconds, nowSeconds) {
@@ -224,12 +253,12 @@ function titleCase(value) {
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
-// "Person in Sala" — the notification headline.
-function eventHeadline(event) {
+// "Person in Gate" — the notification headline.
+function eventHeadline(event, zoneLabels) {
   var label = titleCase(event && event.label)
   var zones = (event && event.zones) || []
   if (zones.length === 0) return label || "Detection"
-  return (label || "Detection") + " in " + titleCase(zones[0])
+  return (label || "Detection") + " in " + zoneDisplay(zoneLabels, event.camera, zones[0])
 }
 
 function eventBody(event, cameraLabel, nowSeconds) {
@@ -299,11 +328,11 @@ function retryDelay(attempt) {
 
 // Tile badge caption: which zone, how long ago. `tick` is the binding
 // dependency that keeps the "how long ago" part moving.
-function badgeText(event, tick) {
+function badgeText(event, tick, zoneLabels) {
   if (!event) return ""
   var zones = event.zones || []
   var when = relativeTime(event.start_time || 0, Date.now() / 1000)
-  return (zones.length > 0 ? titleCase(zones[0]) + " · " : "") + when
+  return (zones.length > 0 ? zoneDisplay(zoneLabels, event.camera, zones[0]) + " · " : "") + when
 }
 
 // Same deal: `tick` only exists so callers re-evaluate as time passes.

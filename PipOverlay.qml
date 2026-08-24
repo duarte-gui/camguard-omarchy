@@ -107,8 +107,8 @@ Item {
 
     function place() {
       // Width and height settle while the surface is still being built, before
-      // the card exists.
-      if (!card) return
+      // the card and its geometry exist.
+      if (!card || !geometry) return
 
       card.x = pipCorner.indexOf("left") >= 0
         ? pipMargin

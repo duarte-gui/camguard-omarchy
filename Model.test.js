@@ -57,6 +57,18 @@ eq("latestByCamera", latestByCamera([
 
 eq("relativeTime", [relativeTime(now-5,now), relativeTime(now-90,now), relativeTime(now-7200,now)], ["now","1m ago","2h ago"])
 eq("headline", eventHeadline({label:"person", zones:["den"]}), "Person in Den")
+
+// A zone drawn in the Frigate UI has a generated key; the toast must show the
+// name the user gave it, not the key.
+const generated = zonesFromConfig({cameras:{street:{zones:{zone_a6b95840:{friendly_name:"Portão"}}}}})
+eq("zonesFromConfig friendly_name", generated, [{camera:"street",zone:"zone_a6b95840",label:"Portão"}])
+const zmap = zoneLabelMap(generated)
+eq("zoneLabelMap", zmap, {"street:zone_a6b95840":"Portão"})
+eq("headline uses friendly_name",
+   eventHeadline({label:"person", camera:"street", zones:["zone_a6b95840"]}, zmap), "Person in Portão")
+eq("headline falls back to the key",
+   eventHeadline({label:"person", camera:"street", zones:["marea"]}, zmap), "Person in Marea")
+eq("zoneDisplay unknown", zoneDisplay(zmap, "yard", "gateway"), "Gateway")
 eq("headline no zone", eventHeadline({label:"person", zones:[]}), "Person")
 eq("pipGeometry 1920", pipGeometry(1920,1080,34,24), {width:653,height:367})
 eq("pipGeometry tiny", pipGeometry(400,300,80,24), {width:320,height:180})
@@ -67,7 +79,7 @@ const cfg = {cameras:{Garage:{ffmpeg:{inputs:[
   {roles:["record","audio"], path:"rtsp://127.0.0.1:8554/garage_main"},
   {roles:["detect"], path:"rtsp://127.0.0.1:8554/garage_sub"}]}, zones:{den:{}}}}}
 eq("camerasFromConfig", camerasFromConfig(cfg), [{name:"Garage",sub:"garage_sub",main:"garage_main",label:"Garage"}])
-eq("zonesFromConfig", zonesFromConfig(cfg), [{camera:"Garage",zone:"den"}])
+eq("zonesFromConfig", zonesFromConfig(cfg), [{camera:"Garage",zone:"den",label:"Den"}])
 
 // gridMove over a 2-column grid of 4 cameras
 eq("gridMove right", gridMove(0, 4, 2, 1, 0), 1)
@@ -79,6 +91,8 @@ eq("gridMove ragged last row", gridMove(2, 3, 2, 1, 0), 2)
 eq("gridMove empty", gridMove(0, 0, 2, 1, 0), 0)
 eq("cameraNamesFromConfig", cameraNamesFromConfig(cfg), ["Garage"])
 eq("badgeText", badgeText({zones:["den"], start_time: Date.now()/1000 - 5}, 0), "Den · now")
+eq("badgeText uses friendly_name",
+   badgeText({camera:"street", zones:["zone_a6b95840"], start_time: Date.now()/1000 - 5}, 0, zmap), "Portão · now")
 eq("isRecent", [isRecent({start_time: Date.now()/1000 - 5}, 120, 0), isRecent({start_time: 0}, 120, 0)], [true, false])
 
 eq("splitList array", splitList(["a"," b ",""]), ["a","b"])
@@ -86,4 +100,5 @@ eq("splitList string", splitList("a, b ,"), ["a","b"])
 eq("splitList null", splitList(null), [])
 eq("allowlist from array", parseZoneAllowlist(["Garage:den","gateway"]), [{camera:"garage",zone:"den"},{camera:"",zone:"gateway"}])
 eq("zoneLabel", zoneLabel({camera:"gate",zone:"gateway"}), "Gate · Gateway")
+eq("zoneLabel prefers friendly_name", zoneLabel({camera:"street",zone:"zone_a6b95840",label:"Portão"}), "Street · Portão")
 eq("zoneKey", zoneKey({camera:"Garage",zone:"den"}), "Garage:den")

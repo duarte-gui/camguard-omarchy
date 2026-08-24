@@ -87,6 +87,10 @@ The gear button in the panel — or `omarchy-shell camguard setup` — opens a
 picker listing every zone Frigate knows about, per camera. Tick the ones worth
 interrupting you for.
 
+Zones drawn in the Frigate UI get a generated key like `zone_a6b95840`; the
+picker shows the `friendly_name` you gave them and keeps the key as a subtitle,
+since the key is what ends up in `shell.json`.
+
 **A detection that never enters a zone never notifies**, whatever else it
 matches. That is the whole point of the filter: a camera pointed at a public
 street sees movement constantly, and only the approach to your gate is worth a

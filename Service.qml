@@ -83,6 +83,7 @@ Item {
 
   readonly property var cameras: configuredCameras.length > 0 ? configuredCameras : discoveredCameras
   readonly property var latestEvents: Model.latestByCamera(events)
+  readonly property var zoneLabels: Model.zoneLabelMap(zonesAvailable)
 
   // Bumped on a timer so anything reading "how long ago" re-evaluates while the
   // panel sits open. Bindings that must age with the clock depend on it.
@@ -119,6 +120,7 @@ Item {
   }
 
   function reset() {
+    configLoaded = false
     seeded = false
     notifiedIds = ({})
     lastNotifyAt = ({})
@@ -191,7 +193,16 @@ Item {
     stderr: StdioCollector { id: errors; waitForEnd: true }
 
     function send(url, timeoutSec, onDone) {
-      if (request.running) return false
+      // A GET already in flight is always the stale one — the caller only asks
+      // again when something it depends on changed, such as the Frigate URL
+      // arriving after construction. Dropping the new request instead would
+      // leave the widget stuck on whatever the old URL returned, or on nothing
+      // at all when the old URL is a hostname that does not resolve.
+      if (request.running) {
+        request.handler = null
+        request.running = false
+      }
+
       request.handler = onDone
       request.command = [
         "curl", "-sS", "--max-time", String(timeoutSec), "--noproxy", "*",
@@ -236,9 +247,13 @@ Item {
   Request { id: eventsRequest }
   Request { id: statsRequest }
 
+  property bool configLoaded: false
+
   function fetchConfig() {
     configRequest.send(Model.configUrl(frigateUrl), 10, function(code, status, data, error) {
       if (code !== 0 || status !== 200 || !data) return
+
+      configLoaded = true
 
       discoveredCameras = Model.camerasFromConfig(data)
       zonesAvailable = Model.zonesFromConfig(data)
@@ -387,7 +402,7 @@ Item {
 
     if (imagePath !== "") args = args.concat(["--image", imagePath])
 
-    args.push(Model.eventHeadline(event))
+    args.push(Model.eventHeadline(event, zoneLabels))
     args.push(Model.eventBody(event, cameraLabel(event.camera), nowSeconds()))
 
     Quickshell.execDetached(args)
@@ -411,12 +426,14 @@ Item {
     onTriggered: service.fetchStats()
   }
 
-  // Frigate's camera list barely changes, but a zone added in the Frigate UI
-  // should reach the panel without a shell restart.
+  // Frigate's camera list barely changes, so this is a slow poll once it has
+  // landed — but until then it retries quickly, because the zone picker and the
+  // discovered camera list are empty without it.
   Timer {
-    interval: 300000
+    interval: service.configLoaded ? 300000 : 10000
     running: service.leader && service.frigateUrl !== ""
     repeat: true
+    triggeredOnStart: true
     onTriggered: service.fetchConfig()
   }
 
