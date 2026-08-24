@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.duarte-gui.camguard",
+  "name": "CamGuard",
+  "version": "0.1.0",
+  "author": "duarte-gui",
+  "license": "MIT",
+  "description": "Frigate NVR cameras in the Omarchy bar: a live snapshot grid, a floating always-on-top PiP with the real RTSP stream, and desktop alerts filtered by zone.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "CamGuard",
+    "description": "Watch your Frigate cameras without leaving what you are doing: a 2x2 live grid in the bar, a floating picture-in-picture overlay, and notifications only for the zones you care about.",
+    "category": "System",
+    "aliases": [
+      "camguard",
+      "cameras",
+      "frigate",
+      "cftv"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "frigateUrl": "http://frigate.local:5000",
+      "rtspUrl": "rtsp://frigate.local:8554",
+      "cameras": "",
+      "snapshotIntervalMs": 1000,
+      "snapshotHeight": 270,
+      "eventPollSec": 5,
+      "notifyEnabled": true,
+      "notifyZones": "",
+      "notifyLabels": "person",
+      "notifyCooldownSec": 60,
+      "badgeWindowMin": 10,
+      "player": "native",
+      "pipQuality": "sub",
+      "pipCorner": "bottom-right",
+      "pipWidthPercent": 34,
+      "pipMargin": 24,
+      "pipAudio": false,
+      "mpvArgs": "--profile=low-latency --rtsp-transport=tcp"
+    },
+    "schema": [
+      {
+        "key": "frigateUrl",
+        "type": "string",
+        "label": "Frigate URL",
+        "defaultValue": "http://frigate.local:5000",
+        "description": "Base address of the Frigate web API, for example http://192.168.0.10:5000. Snapshots, events and camera health all come from here."
+      },
+      {
+        "key": "rtspUrl",
+        "type": "string",
+        "label": "go2rtc RTSP URL",
+        "defaultValue": "rtsp://frigate.local:8554",
+        "description": "Base address of the go2rtc restream bundled with Frigate. Used only by the picture-in-picture overlay."
+      },
+      {
+        "key": "cameras",
+        "type": "string",
+        "label": "Cameras",
+        "defaultValue": "",
+        "description": "Comma-separated list of frigateName:subStream[:mainStream]|Label, for example gate:gate_sub:gate_main|Gate. The Frigate name must match exactly, capitals included. Leave empty to discover every camera from /api/config."
+      },
+      {
+        "key": "snapshotIntervalMs",
+        "type": "integer",
+        "label": "Grid refresh (ms)",
+        "min": 250,
+        "max": 10000,
+        "step": 250,
+        "defaultValue": 1000,
+        "description": "How often each tile pulls a fresh snapshot. Only runs while the panel is open, so a fast rate costs nothing when it is closed."
+      },
+      {
+        "key": "snapshotHeight",
+        "type": "integer",
+        "label": "Snapshot height (px)",
+        "min": 120,
+        "max": 720,
+        "step": 30,
+        "defaultValue": 270,
+        "description": "Height Frigate scales each snapshot to before sending it. Lower is lighter on the network."
+      },
+      {
+        "key": "eventPollSec",
+        "type": "integer",
+        "label": "Event poll interval (seconds)",
+        "min": 2,
+        "max": 120,
+        "step": 1,
+        "defaultValue": 5,
+        "description": "How often Frigate is asked for new detections. This is what drives both the bar badge and the notifications."
+      },
+      {
+        "key": "notifyEnabled",
+        "type": "boolean",
+        "label": "Desktop notifications",
+        "defaultValue": true,
+        "description": "Send a desktop notification when a detection enters one of the zones below. Clicking the notification opens that camera in the overlay."
+      },
+      {
+        "key": "notifyZones",
+        "type": "string",
+        "label": "Notify only for these zones",
+        "defaultValue": "",
+        "description": "Zone names, optionally scoped as camera:zone. Empty means every zone Frigate defines; an explicit empty list means none. The gear button in the panel writes this for you. A detection that never enters a zone never notifies."
+      },
+      {
+        "key": "notifyLabels",
+        "type": "string",
+        "label": "Notify only for these objects",
+        "defaultValue": "person",
+        "description": "Comma-separated Frigate labels, for example person, car. Empty means any tracked object."
+      },
+      {
+        "key": "notifyCooldownSec",
+        "type": "integer",
+        "label": "Notification cooldown (seconds)",
+        "min": 0,
+        "max": 3600,
+        "step": 10,
+        "defaultValue": 60,
+        "description": "Minimum gap between two notifications from the same camera, so one person walking around does not produce a burst."
+      },
+      {
+        "key": "badgeWindowMin",
+        "type": "integer",
+        "label": "Badge window (minutes)",
+        "min": 1,
+        "max": 180,
+        "step": 1,
+        "defaultValue": 10,
+        "description": "How far back the detection counter on the bar icon looks."
+      },
+      {
+        "key": "player",
+        "type": "enum",
+        "label": "Overlay player",
+        "options": [
+          "native",
+          "mpv"
+        ],
+        "defaultValue": "native",
+        "description": "native draws the stream inside the shell as an always-on-top layer that never takes keyboard focus. mpv spawns an external window instead, which needs the Hyprland rules from the README but decodes on the GPU."
+      },
+      {
+        "key": "pipQuality",
+        "type": "enum",
+        "label": "Overlay stream",
+        "options": [
+          "sub",
+          "main"
+        ],
+        "defaultValue": "sub",
+        "description": "sub is the low-resolution detect stream and is far lighter. main is the full-resolution recording stream."
+      },
+      {
+        "key": "pipCorner",
+        "type": "enum",
+        "label": "Overlay corner",
+        "options": [
+          "bottom-right",
+          "bottom-left",
+          "top-right",
+          "top-left"
+        ],
+        "defaultValue": "bottom-right",
+        "description": "Where the overlay first appears. You can always drag it somewhere else."
+      },
+      {
+        "key": "pipWidthPercent",
+        "type": "integer",
+        "label": "Overlay width (% of screen)",
+        "min": 15,
+        "max": 80,
+        "step": 1,
+        "defaultValue": 34,
+        "description": "Width of the overlay as a share of the screen. Height follows at 16:9."
+      },
+      {
+        "key": "pipMargin",
+        "type": "integer",
+        "label": "Overlay margin (px)",
+        "min": 0,
+        "max": 200,
+        "step": 4,
+        "defaultValue": 24,
+        "description": "Gap between the overlay and the screen edges."
+      },
+      {
+        "key": "pipAudio",
+        "type": "boolean",
+        "label": "Overlay audio",
+        "defaultValue": false,
+        "description": "Play the camera audio track. Off by default so the overlay stays a glance, not an interruption."
+      },
+      {
+        "key": "mpvArgs",
+        "type": "string",
+        "label": "Extra mpv arguments",
+        "defaultValue": "--profile=low-latency --rtsp-transport=tcp",
+        "description": "Only used when the overlay player is mpv."
+      }
+    ]
+  }
+}
