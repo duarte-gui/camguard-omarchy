@@ -31,16 +31,12 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
-  // Zone-entering events only: the rest is movement Frigate saw but nobody
-  // asked to be told about.
-  readonly property var zoneEvents: {
-    var out = []
-    var list = service ? (service.events || []) : []
-    for (var i = 0; i < list.length && out.length < 4; i++) {
-      if (((list[i].zones || []).length) > 0) out.push(list[i])
-    }
-    return out
-  }
+  // The events that would have interrupted you: the same zone allowlist and
+  // label filter the notifier uses. Showing more than that would make this list
+  // disagree with the badge beside it, and with the toasts that never came.
+  readonly property var zoneEvents: service
+    ? Model.allowedEvents(service.events, service.eventFilter, 4)
+    : []
 
   // Every zone Frigate defines, as the picker's option list.
   readonly property var zoneOptions: {
@@ -161,9 +157,12 @@ Panel {
     if (hostWidget) hostWidget.closePip()
   }
 
+  // The recording of one event, in the overlay. The clip often does not exist
+  // yet when this is reached from a fresh detection, so the overlay shows what
+  // it is waiting for rather than 404ing into whatever handles mp4.
   function openEventClip(event) {
-    if (!event || !root.bar || !service) return
-    root.bar.run("xdg-open " + Model.shellQuote(Model.eventClipUrl(service.frigateUrl, event.id)))
+    if (!event || !hostWidget) return
+    hostWidget.openClip(event.id, event.camera)
   }
 
   // ---------------------------------------------------------------- cursor
@@ -406,7 +405,7 @@ Panel {
 
                 Text {
                   text: root.service && root.service.notifyEnabled
-                    ? "A toast with the snapshot; clicking it opens that camera."
+                    ? "A toast with the snapshot; clicking it replays the recording."
                     : "Detections still show in the panel, but nothing interrupts you."
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -452,7 +451,9 @@ Panel {
                 width: parent.width
                 wrapMode: Text.WordWrap
                 text: "Zones come from Frigate itself. A detection that never enters "
-                  + "one of them is never a notification, whatever it is."
+                  + "one of them is never a notification, whatever it is — and the "
+                  + "same filter decides the bar badge, the tile captions and the "
+                  + "list of recent alerts."
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 color: root.dim
@@ -473,7 +474,7 @@ Panel {
 
             PanelSectionHeader {
               width: parent.width
-              text: "Recent zone activity"
+              text: "Recent alerts"
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -525,7 +526,14 @@ Panel {
                 MouseArea {
                   anchors.fill: parent
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: root.openPip(eventRow.modelData.camera)
+                  acceptedButtons: Qt.LeftButton | Qt.RightButton
+                  // These rows are history, so a click means "show me what
+                  // happened". The live view of that camera is the right
+                  // button, and the grid above.
+                  onClicked: function(event) {
+                    if (event.button === Qt.RightButton) root.openPip(eventRow.modelData.camera)
+                    else root.openEventClip(eventRow.modelData)
+                  }
                 }
               }
             }

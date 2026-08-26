@@ -35,9 +35,11 @@ BarWidget {
     || Quickshell.screens.length === 0
     || String(hostWindow.screen.name) === String(Quickshell.screens[0].name)
 
+  // A replay that is still waiting for its clip has no window and no stream, but
+  // the overlay card is up and the bar button should say so.
   readonly property bool pipOpen: service.player === "mpv"
-    ? mpvProcess.running
-    : service.pipCamera !== ""
+    ? (mpvProcess.running || service.replayPending)
+    : (service.pipCamera !== "" || service.replayActive)
 
   // Ui/BarWidget has no barForeground of its own — that lives on the bar.
   readonly property color barForeground: bar ? bar.barForeground : Color.foreground
@@ -64,6 +66,7 @@ BarWidget {
   // -------------------------------------------------------------------- pip
 
   function openPip(cameraName) {
+    service.endReplay()
     var target = String(cameraName || "")
     target = target === "" ? defaultPipCamera() : service.resolveCamera(target)
 
@@ -84,6 +87,7 @@ BarWidget {
   }
 
   function closePip() {
+    service.endReplay()
     if (service.player === "mpv") mpvProcess.running = false
     else if (pipLoader.item) pipLoader.item.hide()
     service.pipCamera = ""
@@ -96,10 +100,85 @@ BarWidget {
   }
 
   function cyclePip() {
+    service.endReplay()
     if (service.cameras.length === 0) return "no cameras"
     var index = service.cameraIndex(service.pipCamera)
     var next = (index + 1 + service.cameras.length) % service.cameras.length
     return openPip(service.cameras[next].name)
+  }
+
+  // ------------------------------------------------------------------ replay
+
+  // Replay one event's recording. The clip usually does not exist yet when this
+  // is called from a notification, so the Service starts a wait and the overlay
+  // shows what it is waiting for.
+  function openClip(eventId, cameraHint) {
+    var result = service.requestReplay(eventId, cameraHint)
+    if (result !== "ok") return result
+
+    if (service.player === "native" && pipLoader.item) pipLoader.item.show(service.pipCamera)
+    return "ok"
+  }
+
+  // Leave the recording for the camera it came from.
+  function goLive() {
+    if (!service.replayActive) return "not replaying"
+    service.endReplay()
+
+    if (service.pipCamera === "") return "ok"
+    if (service.player === "mpv") startMpv(service.pipCamera)
+    else if (pipLoader.item) pipLoader.item.show(service.pipCamera)
+    return "ok"
+  }
+
+  // mpv cannot sit on a URL that 404s — it would exit at once — so the wait
+  // happens headless in the Service and the window only opens once there is
+  // something to open.
+  Connections {
+    target: service
+    enabled: service.player === "mpv"
+
+    function onReplayStateChanged() {
+      if (service.replayState === "ready") root.startMpvClip()
+      else if (service.replayActive && service.replayState !== "waiting")
+        root.notifyReplayFailed()
+    }
+  }
+
+  function startMpvClip() {
+    // mpvArgs is deliberately not applied: --profile=low-latency and
+    // --rtsp-transport are live-stream flags, and a seekable recording wants
+    // the opposite of both.
+    var args = [
+      "mpv",
+      service.replayClipUrl,
+      "--title=CamGuardPiP",
+      "--wayland-app-id=camguard-pip",
+      "--ontop",
+      "--no-border",
+      "--force-window=immediate",
+      "--keepaspect",
+      "--autofit=" + service.pipWidthPercent + "%",
+      // The on-screen controller is the seek bar. The live overlay hides it;
+      // a recording is the one case where it is the point.
+      "--osc=yes",
+      "--keep-open=yes",
+      "--loop-file=no"
+    ]
+
+    args.push(service.pipAudio ? "--audio=yes" : "--no-audio")
+
+    mpvProcess.running = false
+    mpvProcess.command = args
+    mpvProcess.running = true
+  }
+
+  function notifyReplayFailed() {
+    Quickshell.execDetached([
+      "omarchy-notification-send", "--app-name", "CamGuard", "-u", "low",
+      "CamGuard", service.replayMessage
+    ])
+    service.endReplay()
   }
 
   // Right click should land on whatever is worth looking at: the camera that
@@ -108,9 +187,8 @@ BarWidget {
     if (service.pipCamera !== "") return service.pipCamera
 
     var newest = null
-    var list = service.events || []
+    var list = service.alertEvents || []
     for (var i = 0; i < list.length; i++) {
-      if (((list[i].zones || []).length) === 0) continue
       if (service.cameraIndex(list[i].camera) < 0) continue
       newest = list[i].camera
       break
@@ -159,7 +237,9 @@ BarWidget {
   Process {
     id: mpvProcess
     running: false
-    onExited: if (service.player === "mpv") service.pipCamera = ""
+    // A replay still waiting for its clip has no window yet; clearing the camera
+    // here would strand it.
+    onExited: if (service.player === "mpv" && !service.replayPending) service.pipCamera = ""
   }
 
   Loader {
@@ -237,6 +317,10 @@ BarWidget {
   // reads as `omarchy-shell camguard pip Garagem`.
   IpcHandler {
     target: "camguard"
+    // The bar builds one widget per monitor, and they would all register this
+    // target. Only the leader owns the overlay, so only the leader should be
+    // the one answering.
+    enabled: root.isLeader
 
     function open(): void { root.open() }
     function close(): void { root.close() }
@@ -248,6 +332,29 @@ BarWidget {
     function pipToggle(): string { root.togglePip(""); return "ok" }
     function pipNext(): string { return root.cyclePip() }
     function pipClose(): string { root.closePip(); return "ok" }
+
+    // Replay one event's recording — what clicking a notification runs. One
+    // argument on purpose: Quickshell fixes IPC arity, so the camera is
+    // recovered from the event itself.
+    function clip(eventId: string): string { return root.openClip(eventId, "") }
+
+    // Replay whatever alerted most recently, for a keybinding.
+    function replay(): string {
+      var list = service.alertEvents || []
+      var event = list.length > 0 ? list[0] : service.lastAlert
+      if (!event) return "nothing has alerted yet"
+      return root.openClip(event.id, event.camera)
+    }
+
+    function live(): string { return root.goLive() }
+
+    // Enough to drive the wait from a script while it is happening.
+    function replayStatus(): string {
+      if (!service.replayActive) return "idle"
+      return service.replayState + " " + service.replayEventId
+        + " " + service.replayWaitedSec + "s"
+        + (service.replayMessage !== "" ? " · " + service.replayMessage : "")
+    }
     function setup(): string { root.openSetup(); return "ok" }
     function status(): string { return root.statusText }
 

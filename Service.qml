@@ -69,6 +69,14 @@ Item {
   readonly property var zoneAllowlist: Model.parseZoneAllowlist(notifyZonesRaw)
   readonly property bool allowAllZones: !notifyZonesExplicit
   readonly property var notifyLabels: Model.parseLabels(setting("notifyLabels", "person"))
+  // What clicking the toast does. The clip is the default because the toast is
+  // about something that already happened; "live" is there for anyone who would
+  // rather see the camera now than a recording of a moment ago.
+  readonly property string notifyOpens: setting("notifyOpens", "clip") === "live" ? "live" : "clip"
+  readonly property int clipWaitSec: setting("clipWaitSec", 180)
+  // Not a setting: a fact about Frigate. An event that ended this long ago and
+  // still has no clip is never getting one.
+  readonly property int clipGraceSec: 45
 
   // ---- live state
   property var configuredCameras: []
@@ -81,15 +89,53 @@ Item {
   property var zonesAvailable: []
   property string pipCamera: ""
 
+  // ---- the replay of one event's clip
+  //
+  // A replay is a layer on top of the live overlay rather than a mode that
+  // replaces it: pipCamera always points at the event's camera, so "live" is
+  // just clearing replayEventId and letting the stream binding take over.
+  property string replayEventId: ""
+  property var replayEvent: null
+  // idle | waiting | fetching | ready | no-clip | timeout | missing | error
+  property string replayState: "idle"
+  property string replayFile: ""
+  property string replayMessage: ""
+  property int replayAttempt: 0
+  property int replayWaitedSec: 0
+  property int replayLoadFailures: 0
+  // Bumped once per request. Clicking a second toast while the first is still
+  // waiting changes no URL, so this is what tells the overlay to drop the
+  // transient state it built up for the previous one.
+  property int replaySeq: 0
+
+  readonly property bool replayActive: replayEventId !== ""
+  readonly property bool replayPending: replayActive && replayState !== "ready"
+  // The local copy, never the Frigate URL. Frigate serves clip.mp4 without
+  // Accept-Ranges — a byte-range request comes back as the whole file — so
+  // ffmpeg's http demuxer fails the moment it tries to seek. Downloading first
+  // costs about a second on a LAN and makes the scrub bar exact.
+  readonly property string replayClipUrl:
+    (replayState === "ready" && replayFile !== "") ? "file://" + replayFile : ""
+
   readonly property var cameras: configuredCameras.length > 0 ? configuredCameras : discoveredCameras
-  readonly property var latestEvents: Model.latestByCamera(events)
   readonly property var zoneLabels: Model.zoneLabelMap(zonesAvailable)
+
+  // The zone allowlist and the label filter are what decide whether something
+  // is worth interrupting you for, so they decide what the badge, the tile
+  // captions and the panel list show too. Anything else means the bar lights up
+  // for zones the user deliberately unticked.
+  readonly property var eventFilter: ({
+    allowlist: zoneAllowlist,
+    allowAll: allowAllZones,
+    labels: notifyLabels
+  })
+  readonly property var alertEvents: Model.allowedEvents(events, eventFilter, 0)
+  readonly property var latestEvents: Model.latestByCamera(events, eventFilter)
 
   // Bumped on a timer so anything reading "how long ago" re-evaluates while the
   // panel sits open. Bindings that must age with the clock depend on it.
   property int tick: 0
-  readonly property int recentCount: Model.countRecent(events, badgeWindowMin, tick, nowSeconds())
-  readonly property bool hasFreshAlert: Model.countRecent(events, 2, tick, nowSeconds()) > 0
+  readonly property int recentCount: Model.countRecent(events, badgeWindowMin, tick, nowSeconds(), eventFilter)
 
   readonly property string statusLine: {
     if (!everConnected) return "connecting…"
@@ -103,6 +149,11 @@ Item {
   property var lastNotifyAt: ({})
   property var pendingNotifications: []
   property bool seeded: false
+  // The events poll only keeps the last two minutes, which is the right window
+  // for deciding what to notify about and the wrong one for "replay whatever
+  // just alerted" — by the time you reach for that, the event is long gone from
+  // the list. This is the one that outlives it.
+  property var lastAlert: null
 
   readonly property string cacheDir: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/camguard"
 
@@ -112,7 +163,18 @@ Item {
   Component.onCompleted: {
     configuredCameras = Model.parseCameras(cameraSpec)
     Quickshell.execDetached(["mkdir", "-p", cacheDir])
-    refresh()
+    // One snapshot per notification and one mp4 per replay accumulate here for
+    // as long as the session lasts. The directory is on tmpfs, so this is about
+    // a busy day rather than about forever, but a few hundred megabytes of
+    // clips is still worth sweeping.
+    Quickshell.execDetached(["find", cacheDir, "-maxdepth", "1", "-type", "f",
+      "-mmin", "+120", "-delete"])
+    // No refresh() here. Every poll timer below is triggeredOnStart, so calling
+    // it would fire each request twice in the same tick — and send() kills the
+    // one already in flight, which lands the killed process's empty output on
+    // the new handler and marks Frigate unreachable. At a 5-second interval the
+    // next tick hides it; at 120 the widget sits on "connecting…" for two
+    // minutes.
   }
 
   function nowSeconds() {
@@ -120,6 +182,7 @@ Item {
   }
 
   function reset() {
+    endReplay()
     configLoaded = false
     seeded = false
     notifiedIds = ({})
@@ -211,34 +274,59 @@ Item {
     id: request
 
     property var handler: null
+    property var pending: null
 
     stdout: StdioCollector { id: collector; waitForEnd: true }
     stderr: StdioCollector { id: errors; waitForEnd: true }
 
+    // A GET already in flight is always the stale one — the caller only asks
+    // again when something it depends on changed, such as the Frigate URL
+    // arriving after construction. Dropping the new request instead would leave
+    // the widget stuck on whatever the old URL returned, or on nothing at all
+    // when the old URL is a hostname that does not resolve.
+    //
+    // The replacement is queued rather than started here. Killing a process and
+    // starting another in the same tick delivers the killed one's exit — code
+    // 15, empty body — to the handler that was just installed, which reads as
+    // "Frigate unreachable" and then waits a whole poll interval before trying
+    // again. At five seconds that is invisible; at a hundred and twenty the
+    // widget sits on "connecting…" for two minutes at every startup.
     function send(url, timeoutSec, onDone) {
-      // A GET already in flight is always the stale one — the caller only asks
-      // again when something it depends on changed, such as the Frigate URL
-      // arriving after construction. Dropping the new request instead would
-      // leave the widget stuck on whatever the old URL returned, or on nothing
-      // at all when the old URL is a hostname that does not resolve.
+      request.pending = { url: url, timeout: timeoutSec, done: onDone }
+
       if (request.running) {
+        // Its result is stale, and its exit is what starts the queued one.
         request.handler = null
         request.running = false
+        return true
       }
 
-      request.handler = onDone
+      request.startPending()
+      return true
+    }
+
+    function startPending() {
+      var next = request.pending
+      request.pending = null
+      if (!next) return
+
+      request.handler = next.done
       request.command = [
-        "curl", "-sS", "--max-time", String(timeoutSec), "--noproxy", "*",
-        "-w", "\n%{http_code}", url
+        "curl", "-sS", "--max-time", String(next.timeout), "--noproxy", "*",
+        "-w", "\n%{http_code}", next.url
       ]
       request.running = true
-      return true
     }
 
     onExited: function(exitCode) {
       var done = request.handler
       request.handler = null
-      if (!done) return
+
+      if (!done) {
+        // A cancelled request. Whatever replaced it goes now.
+        request.startPending()
+        return
+      }
 
       var raw = String(collector.text || "")
       var status = 0
@@ -263,12 +351,19 @@ Item {
       }
 
       done(exitCode, status, parsed, String(errors.text || "").trim())
+
+      // A caller that asked again while this one was finishing.
+      request.startPending()
     }
   }
 
   Request { id: configRequest }
   Request { id: eventsRequest }
   Request { id: statsRequest }
+  // Its own instance: send() drops whatever that Request already has in flight,
+  // so sharing one with the 5-second events poll would mean the two cancelling
+  // each other for as long as a replay is waiting.
+  Request { id: clipRequest }
 
   property bool configLoaded: false
 
@@ -333,6 +428,226 @@ Item {
     })
   }
 
+  // ------------------------------------------------------------------ replay
+
+  // The clip of an event does not exist while the event is happening. Frigate
+  // writes it once the object is gone, plus the camera's post_capture, plus
+  // however long the recording segment takes to close — so at the moment the
+  // toast goes out, asking for the mp4 is a 404. Clicking the toast therefore
+  // starts a wait, not a download, and the overlay says so.
+  function requestReplay(eventId, cameraHint) {
+    var id = String(eventId || "").trim()
+    if (id === "") return "no event"
+    if (frigateUrl === "") return "no Frigate URL"
+
+    replaySeq++
+    replayEventId = id
+    replayEvent = null
+    replayFile = ""
+    replayState = "waiting"
+    replayMessage = "waiting for the clip…"
+    replayAttempt = 0
+    replayWaitedSec = 0
+    replayLoadFailures = 0
+    clipDownload.running = false
+
+    // Seed from the poll we already have. A toast clicked while it is fresh is
+    // still inside the event window, which gives the waiting card a camera name
+    // and a headline before the first request comes back — and an old event
+    // that already has its clip starts playing without a round trip.
+    var seed = eventById(id)
+    if (seed) adoptReplayEvent(seed)
+
+    var hinted = resolveCamera(String(cameraHint || ""))
+    if (hinted !== "") pipCamera = hinted
+
+    if (replayState === "waiting") pollClip()
+    return "ok"
+  }
+
+  function eventById(id) {
+    var list = events || []
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].id === id) return list[i]
+    }
+    return null
+  }
+
+  // Pointing pipCamera at the event's camera is what makes the overlay's "live"
+  // button possible: it has somewhere to fall back to.
+  function adoptReplayEvent(data) {
+    if (!data) return
+    replayEvent = data
+
+    var camera = resolveCamera(String(data.camera || ""))
+    if (camera !== "" && camera !== pipCamera) pipCamera = camera
+
+    applyVerdict()
+  }
+
+  function pollClip() {
+    if (!replayActive) return
+
+    clipRequest.send(Model.eventUrl(frigateUrl, replayEventId), 8,
+      function(code, status, data, error) {
+        if (!replayActive) return
+
+        if (status === 404) {
+          failReplay("missing", "Frigate no longer has this event")
+          return
+        }
+
+        // A curl failure or a 5xx is a blip, not an answer. Staying in the wait
+        // and letting the deadline decide beats declaring a missing clip
+        // because one request timed out.
+        if (code === 0 && status === 200 && data) adoptReplayEvent(data)
+        else applyVerdict()
+      })
+  }
+
+  function applyVerdict() {
+    if (!replayActive) return
+
+    var verdict = Model.clipVerdict(replayEvent, nowSeconds(), replayWaitedSec,
+      clipWaitSec, clipGraceSec)
+
+    if (verdict === "ready") {
+      clipTimer.stop()
+      fetchClip()
+      return
+    }
+
+    if (verdict === "no-clip") {
+      // The honest diagnosis, and the one the user can act on: Frigate kept no
+      // recording for this event because the zone it entered is not in that
+      // camera's record.alerts/detections required_zones.
+      failReplay("no-clip", "Frigate kept no recording of this event")
+      return
+    }
+
+    if (verdict === "timeout") {
+      failReplay("timeout", "the clip is still not ready")
+      return
+    }
+
+    replayState = "waiting"
+    replayAttempt++
+    clipTimer.interval = Model.clipPollDelay(replayAttempt)
+    clipTimer.restart()
+  }
+
+  // has_clip can turn true a beat before the mp4 is actually servable, and
+  // Frigate's own 404 is the only signal for that gap. The overlay reports the
+  // load failure here rather than falling into the live stream's reconnect
+  // ladder, which would hammer the clip forever.
+  function clipLoadFailed(reason) {
+    if (!replayActive) return
+
+    replayLoadFailures++
+    if (replayLoadFailures > 4) {
+      failReplay("error", reason !== "" ? reason : "the clip would not open")
+      return
+    }
+
+    replayState = "waiting"
+    replayMessage = "waiting for the clip…"
+    replayAttempt++
+    clipTimer.interval = Model.clipPollDelay(replayAttempt)
+    clipTimer.restart()
+  }
+
+  // curl -f turns a 404 into exit 22 and writes nothing, which is what makes
+  // this the real readiness test: has_clip can flip true a moment before the
+  // mp4 is servable, and a partial file handed to the player is worse than one
+  // more second of waiting.
+  function fetchClip() {
+    if (!replayActive) return
+    if (replayState === "fetching" || replayState === "ready") return
+
+    replayState = "fetching"
+    replayMessage = "fetching the clip…"
+    clipDownload.path = cacheDir + "/"
+      + String(replayEventId).replace(/[^A-Za-z0-9._-]/g, "_") + ".mp4"
+    clipDownload.command = [
+      "curl", "-fsS", "--max-time", "60", "--noproxy", "*", "--create-dirs",
+      "-o", clipDownload.path, Model.eventClipUrl(frigateUrl, replayEventId)
+    ]
+    clipDownload.running = true
+  }
+
+  Process {
+    id: clipDownload
+    running: false
+
+    property string path: ""
+
+    onExited: function(exitCode) {
+      if (!service.replayActive) return
+
+      if (exitCode === 0) {
+        service.replayFile = path
+        service.replayMessage = ""
+        service.replayState = "ready"
+        return
+      }
+
+      // 22 is curl's "the server said 4xx": the clip was announced but is not
+      // being served yet. Anything else is a transfer that broke.
+      if (exitCode === 22) {
+        service.replayState = "waiting"
+        service.replayMessage = "waiting for the clip…"
+        service.replayAttempt++
+        clipTimer.interval = Model.clipPollDelay(service.replayAttempt)
+        clipTimer.restart()
+        return
+      }
+
+      service.failReplay("error", "the clip could not be downloaded")
+    }
+  }
+
+  function retryReplay() {
+    if (replayEventId !== "") requestReplay(replayEventId, pipCamera)
+  }
+
+  function failReplay(state, message) {
+    clipTimer.stop()
+    replayState = state
+    replayMessage = message
+  }
+
+  function endReplay() {
+    clipTimer.stop()
+    clipDownload.running = false
+    replayEventId = ""
+    replayEvent = null
+    replayFile = ""
+    replayState = "idle"
+    replayMessage = ""
+    replayAttempt = 0
+    replayWaitedSec = 0
+    replayLoadFailures = 0
+  }
+
+  Timer {
+    id: clipTimer
+    repeat: false
+    onTriggered: service.pollClip()
+  }
+
+  // Ages the wait: it is both the deadline in clipVerdict and the seconds the
+  // waiting card shows. Runs only while something is actually waiting.
+  Timer {
+    interval: 1000
+    running: service.replayState === "waiting"
+    repeat: true
+    onTriggered: {
+      service.replayWaitedSec++
+      // Time out even if every poll is hanging rather than answering.
+      if (service.replayWaitedSec >= service.clipWaitSec) service.applyVerdict()
+    }
+  }
+
   // ----------------------------------------------------------- notifications
 
   function considerNotifications(list) {
@@ -363,6 +678,7 @@ Item {
       if (now - last < notifyCooldownSec) continue
 
       lastNotifyAt[event.camera] = now
+      lastAlert = event
       pendingNotifications.push(event)
       queued = true
     }
@@ -417,16 +733,20 @@ Item {
       "omarchy-notification-send",
       "--app-name", "CamGuard",
       "-u", "critical",
-      "-g", "󰞮",
-      // Clicking the toast opens that camera. The daemon runs this string in a
-      // shell later, so the camera name is quoted here rather than trusted.
-      "--exec", "omarchy-shell -q camguard pip " + Model.shellQuote(event.camera)
+      "-g", "󰞮"
     ]
 
     if (imagePath !== "") args = args.concat(["--image", imagePath])
 
     args.push(Model.eventHeadline(event, zoneLabels))
     args.push(Model.eventBody(event, cameraLabel(event.camera), nowSeconds()))
+
+    // --exec takes the rest of the line as the click command's words and hands
+    // them to the daemon as data it never re-parses, so it has to come last and
+    // it has to be separate arguments. One quoted string is rejected outright,
+    // and quoting an argument here would arrive with the quotes still in it —
+    // which is why nothing below goes through shellQuote.
+    args = args.concat(["--exec"], Model.notifyExecArgv(notifyOpens, event.id, event.camera))
 
     Quickshell.execDetached(args)
   }

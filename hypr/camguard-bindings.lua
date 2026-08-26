@@ -13,3 +13,7 @@ o.bind("SUPER + ALT + C", "Cameras", "omarchy-shell -q camguard toggle")
 
 -- Throw the last camera that alerted into the floating overlay, or close it.
 o.bind("SUPER + SHIFT + ALT + C", "Camera overlay", "omarchy-shell -q camguard pipToggle")
+
+-- Replay the recording of whatever alerted last — the same thing clicking the
+-- notification does, for when the toast is already gone.
+o.bind("SUPER + CTRL + ALT + C", "Replay last alert", "omarchy-shell -q camguard replay")

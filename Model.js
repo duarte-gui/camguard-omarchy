@@ -131,6 +131,12 @@ function eventClipUrl(base, eventId) {
   return trimSlashes(base) + "/api/events/" + encodeURIComponent(eventId) + "/clip.mp4"
 }
 
+// The single event, which is the only honest way to ask "is the clip ready?".
+// `has_clip` on the list endpoint is a snapshot of a moment that has passed.
+function eventUrl(base, eventId) {
+  return trimSlashes(base) + "/api/events/" + encodeURIComponent(eventId)
+}
+
 function statsUrl(base) {
   return trimSlashes(base) + "/api/stats"
 }
@@ -181,6 +187,31 @@ function matchesZones(allowlist, camera, zones, allowAll) {
   }
 
   return false
+}
+
+// One predicate for "would this event have interrupted you": the zone
+// allowlist and the label filter, exactly as the notifier applies them.
+//
+// A missing `filter` keeps the old meaning — "entered any zone at all" — so a
+// caller that has no Service to ask still gets something sensible.
+function eventAllowed(event, filter) {
+  if (!event) return false
+  if (!filter) return ((event.zones || []).length) > 0
+  if (filter.labels && !matchesLabel(filter.labels, event.label)) return false
+  return matchesZones(filter.allowlist, event.camera, event.zones, filter.allowAll)
+}
+
+// Frigate returns events newest first, and nothing here reorders them.
+// `limit` of 0 means "all of them".
+function allowedEvents(events, filter, limit) {
+  var out = []
+  var cap = limit > 0 ? limit : Infinity
+
+  for (var i = 0; i < (events || []).length && out.length < cap; i++) {
+    if (eventAllowed(events[i], filter)) out.push(events[i])
+  }
+
+  return out
 }
 
 function matchesLabel(labels, label) {
@@ -247,6 +278,26 @@ function relativeTime(epochSeconds, nowSeconds) {
   return Math.floor(delta / 86400) + "d ago"
 }
 
+// "0:07", "1:23", "1:02:03" — the replay scrub's clock. Milliseconds, because
+// that is what MediaPlayer reports.
+function clockTime(ms) {
+  var total = Math.max(0, Math.floor((ms || 0) / 1000))
+  var seconds = total % 60
+  var minutes = Math.floor(total / 60) % 60
+  var hours = Math.floor(total / 3600)
+  var pad = function(n) { return n < 10 ? "0" + n : String(n) }
+
+  if (hours > 0) return hours + ":" + pad(minutes) + ":" + pad(seconds)
+  return minutes + ":" + pad(seconds)
+}
+
+// A duration of zero means the player has not read the file's metadata yet,
+// which is a different thing from a zero-length clip.
+function scrubLabel(positionMs, durationMs) {
+  if (!(durationMs > 0)) return "--:--"
+  return clockTime(positionMs) + " / " + clockTime(durationMs)
+}
+
 function titleCase(value) {
   var text = String(value || "").replace(/[_-]+/g, " ").trim()
   if (text === "") return ""
@@ -267,31 +318,31 @@ function eventBody(event, cameraLabel, nowSeconds) {
 }
 
 // Events Frigate returns are ordered newest first; the badge only counts the
-// ones inside the window that actually entered a zone. `tick` is unused on
-// purpose: it is the binding dependency that ages this count over time.
-function countRecent(events, windowMinutes, tick, nowSeconds) {
+// ones inside the window that the filter would have alerted on. `tick` is
+// unused on purpose: it is the binding dependency that ages this count over
+// time.
+function countRecent(events, windowMinutes, tick, nowSeconds, filter) {
   var cutoff = nowSeconds - windowMinutes * 60
   var count = 0
 
   for (var i = 0; i < (events || []).length; i++) {
     var event = events[i]
-    if (!event) continue
+    if (!eventAllowed(event, filter)) continue
     if ((event.start_time || 0) < cutoff) continue
-    if (((event.zones || []).length) === 0) continue
     count++
   }
 
   return count
 }
 
-// Most recent zone-entering event per camera, for the tile badges.
-function latestByCamera(events) {
+// Most recent alerting event per camera, for the tile badges.
+function latestByCamera(events, filter) {
   var map = ({})
 
   for (var i = 0; i < (events || []).length; i++) {
     var event = events[i]
-    if (!event || !event.camera) continue
-    if (((event.zones || []).length) === 0) continue
+    if (!eventAllowed(event, filter)) continue
+    if (!event.camera) continue
 
     var current = map[event.camera]
     if (!current || (event.start_time || 0) > (current.start_time || 0)) map[event.camera] = event
@@ -318,10 +369,56 @@ function shellQuote(value) {
   return "'" + String(value === undefined || value === null ? "" : value).replace(/'/g, "'\\''") + "'"
 }
 
+// What clicking the notification runs, as an argv vector.
+//
+// omarchy-notification-send takes --exec as separate words and passes them to
+// the daemon as data that is never re-parsed. One quoted string is rejected
+// outright, and shell-quoting an argument here would travel as literal quote
+// characters — so nothing in this vector may be passed through shellQuote.
+function notifyExecArgv(mode, eventId, camera) {
+  if (mode === "live" || !eventId)
+    return ["omarchy-shell", "-q", "camguard", "pip", String(camera || "")]
+  return ["omarchy-shell", "-q", "camguard", "clip", String(eventId)]
+}
+
 // Backoff for a stream that will not start: quick retries first, then back off
 // so a camera that is genuinely down stops hammering the restream.
 function retryDelay(attempt) {
   var ladder = [2000, 5000, 10000, 30000]
+  var index = Math.max(0, Math.min(attempt, ladder.length - 1))
+  return ladder[index]
+}
+
+// The clip of an event does not exist while the event is happening: Frigate
+// only writes it once the object is gone, plus the camera's post_capture, plus
+// the time it takes the recording segment to close. Asking for it early is a
+// 404, so the overlay waits — and this is the whole decision of what that wait
+// means at any moment.
+//
+//   "ready"   — the mp4 exists, go play it
+//   "waiting" — keep asking
+//   "no-clip" — the event ended a while ago and still has none, so it never
+//               will: record.<alerts|detections>.required_zones on that camera
+//               does not cover the zone this object entered
+//   "timeout" — still running long past any reasonable wait
+function clipVerdict(event, nowSeconds, waitedSeconds, maxWaitSec, graceSec) {
+  if (!event) return "waiting"
+  if (event.has_clip) return "ready"
+
+  var grace = graceSec > 0 ? graceSec : 45
+  if (event.end_time && (nowSeconds - event.end_time) > grace) return "no-clip"
+
+  var limit = maxWaitSec > 0 ? maxWaitSec : 180
+  if (waitedSeconds >= limit) return "timeout"
+
+  return "waiting"
+}
+
+// Ask often while the clip is plausibly seconds away, then ease off. Unlike
+// retryDelay this starts under a second, because the common case is a wait of
+// one or two polls and a sluggish first answer is the whole experience.
+function clipPollDelay(attempt) {
+  var ladder = [1000, 1500, 2000, 3000, 5000, 5000, 8000, 10000]
   var index = Math.max(0, Math.min(attempt, ladder.length - 1))
   return ladder[index]
 }

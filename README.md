@@ -60,9 +60,11 @@ with a stream name that does not exist. Spelling the list out is worth it.
 | **Left click** the bar icon | open the camera grid |
 | **Right click** | throw the last camera that alerted into the overlay |
 | **Middle click** | open the Frigate web UI |
-| **Click a camera** | open it in the overlay |
-| **Right click a camera** | open that detection's clip |
+| **Click a camera** | open it live in the overlay |
+| **Right click a camera** | replay that camera's last detection in the overlay |
+| **Click a recent alert** | replay it · **right click** the row for that camera live |
 | **Click the overlay** | next camera · **middle click** closes it · drag to move |
+| **Click a replay** | play / pause · drag the bar to scrub · ↻ repeats · the arrow goes back to live |
 
 In the panel: arrows or `hjkl` move, `1`–`9` jump straight to a camera,
 `Enter` opens the overlay, `s` opens the zone settings, `r` refreshes,
@@ -77,6 +79,7 @@ and `SUPER+CTRL+C` are already taken on a stock Omarchy, so:
 ```lua
 o.bind("SUPER + ALT + C", "Cameras", "omarchy-shell -q camguard toggle")
 o.bind("SUPER + SHIFT + ALT + C", "Camera overlay", "omarchy-shell -q camguard pipToggle")
+o.bind("SUPER + CTRL + ALT + C", "Replay last alert", "omarchy-shell -q camguard replay")
 ```
 
 Copy those into `~/.config/hypr/bindings.lua`.
@@ -94,10 +97,38 @@ since the key is what ends up in `shell.json`.
 **A detection that never enters a zone never notifies**, whatever else it
 matches. That is the whole point of the filter: a camera pointed at a public
 street sees movement constantly, and only the approach to your gate is worth a
-toast. Notifications carry the event snapshot, and clicking one opens that
-camera in the overlay.
+toast. Notifications carry the event snapshot, and clicking one replays what
+happened.
+
+The same filter decides everything the widget shows — the dot on the bar icon,
+the caption on each tile, and the list of recent alerts in the panel. What the
+panel displays is what would have interrupted you, and nothing else.
 
 With nothing configured, every zone alerts. Untick them all and nothing does.
+
+### Replaying a detection
+
+Clicking a notification plays Frigate's recording of that detection in the
+overlay, with a scrub bar, play/pause and a repeat toggle. The arrow in the
+corner drops back to the live stream of the same camera.
+
+**The clip does not exist yet when the toast appears.** Frigate only writes it
+once the object is gone, plus that camera's `post_capture`, plus however long
+the recording segment takes to close — so the overlay shows the event snapshot
+and waits, usually for twenty to forty seconds. It never quietly shows you the
+live stream instead: that would answer a different question than the one you
+asked.
+
+If a detection's zone is not covered by `record.alerts.required_zones` or
+`record.detections.required_zones` on that camera in Frigate, no clip is ever
+written for it. The overlay works that out from the event's end time rather than
+waiting the full `clipWaitSec`, and says so.
+
+The clip is downloaded before it plays. Frigate serves `clip.mp4` without
+`Accept-Ranges` — a byte-range request comes back as the whole file — so
+ffmpeg's HTTP demuxer fails the moment it tries to seek. A local copy costs
+about a second on a LAN and makes the scrub bar exact. Copies land in
+`$XDG_RUNTIME_DIR/camguard` and are swept at startup.
 
 ### Command line
 
@@ -108,6 +139,10 @@ omarchy-shell camguard pip Garage      # overlay for one camera
 omarchy-shell camguard pipToggle       # overlay on/off
 omarchy-shell camguard pipNext         # next camera in the overlay
 omarchy-shell camguard pipClose
+omarchy-shell camguard clip <event-id> # replay one event — what a toast click runs
+omarchy-shell camguard replay          # replay whatever alerted last
+omarchy-shell camguard live            # leave the replay for the live stream
+omarchy-shell camguard replayStatus    # "waiting <id> 12s · waiting for the clip…"
 omarchy-shell camguard status          # "4 cameras · 2 detections"
 omarchy-shell camguard cameras         # the resolved camera list, for debugging
 ```
@@ -127,6 +162,8 @@ Every key goes inline on the widget's entry in `shell.json`.
 | `notifyEnabled` | `true` | desktop notifications |
 | `notifyZones` | *(unset — every zone)* | array of `camera:zone`; the gear button writes it |
 | `notifyLabels` | `person` | Frigate labels worth notifying about; empty means any |
+| `notifyOpens` | `clip` | what clicking a toast does — `clip` replays the recording, `live` jumps to the camera |
+| `clipWaitSec` | `180` | how long to wait for Frigate to finish writing a clip |
 | `notifyCooldownSec` | `60` | minimum gap between toasts from one camera |
 | `badgeWindowMin` | `10` | how far back the bar dot looks |
 | `player` | `native` | `native` or `mpv` — see below |

@@ -102,3 +102,71 @@ eq("allowlist from array", parseZoneAllowlist(["Garage:den","gateway"]), [{camer
 eq("zoneLabel", zoneLabel({camera:"gate",zone:"gateway"}), "Gate · Gateway")
 eq("zoneLabel prefers friendly_name", zoneLabel({camera:"street",zone:"zone_a6b95840",label:"Portão"}), "Street · Portão")
 eq("zoneKey", zoneKey({camera:"Garage",zone:"den"}), "Garage:den")
+
+// --- clip replay ---------------------------------------------------------
+
+eq("eventUrl", eventUrl("http://h:5000/", "1787700603.795232-hesuzw"),
+   "http://h:5000/api/events/1787700603.795232-hesuzw")
+eq("eventClipUrl", eventClipUrl("http://h:5000", "1787700603.795232-hesuzw"),
+   "http://h:5000/api/events/1787700603.795232-hesuzw/clip.mp4")
+
+// The notification's click action is an argv vector, never a shell string:
+// omarchy-notification-send rejects a single word containing a space, and it
+// hands the words to the daemon as data. A quoted argument would arrive with
+// its quotes intact.
+eq("notifyExecArgv clip", notifyExecArgv("clip", "1787700603.795232-hesuzw", "Garagem"),
+   ["omarchy-shell","-q","camguard","clip","1787700603.795232-hesuzw"])
+eq("notifyExecArgv live", notifyExecArgv("live", "1787700603.795232-hesuzw", "Garagem"),
+   ["omarchy-shell","-q","camguard","pip","Garagem"])
+eq("notifyExecArgv falls back to live without an id", notifyExecArgv("clip", "", "Garagem"),
+   ["omarchy-shell","-q","camguard","pip","Garagem"])
+eq("notifyExecArgv has no word with a space",
+   notifyExecArgv("clip", "1787700603.795232-hesuzw", "Porta da Frente").some(w => /\s/.test(w)), false)
+
+const clipNow = 1787700700
+eq("clipVerdict ready", clipVerdict({has_clip:true}, clipNow, 3, 180, 45), "ready")
+eq("clipVerdict still running", clipVerdict({has_clip:false, end_time:null}, clipNow, 5, 180, 45), "waiting")
+eq("clipVerdict just ended", clipVerdict({has_clip:false, end_time:clipNow-10}, clipNow, 10, 180, 45), "waiting")
+// Ended long ago and still no clip: required_zones does not cover this event,
+// so waiting the full three minutes would only be theatre.
+eq("clipVerdict never recorded", clipVerdict({has_clip:false, end_time:clipNow-90}, clipNow, 90, 180, 45), "no-clip")
+eq("clipVerdict endless event", clipVerdict({has_clip:false, end_time:null}, clipNow, 200, 180, 45), "timeout")
+eq("clipVerdict no event yet", clipVerdict(null, clipNow, 2, 180, 45), "waiting")
+eq("clipPollDelay", [clipPollDelay(0), clipPollDelay(3), clipPollDelay(99)], [1000, 3000, 10000])
+
+eq("clockTime", [clockTime(0), clockTime(7000), clockTime(83000), clockTime(3723000)],
+   ["0:00", "0:07", "1:23", "1:02:03"])
+eq("scrubLabel", scrubLabel(7000, 21000), "0:07 / 0:21")
+eq("scrubLabel unknown duration", scrubLabel(0, 0), "--:--")
+
+// --- the allowlist applies to the panel, not just the toast ---------------
+
+const filter = {allowlist: parseZoneAllowlist("rua:frente_garagem, porta_frente:portao"),
+                allowAll: false, labels: ["person"]}
+
+eq("eventAllowed in an allowed zone",
+   eventAllowed({camera:"rua", label:"person", zones:["frente_garagem"]}, filter), true)
+eq("eventAllowed in a zone nobody picked",
+   eventAllowed({camera:"rua", label:"person", zones:["Asfalto"]}, filter), false)
+eq("eventAllowed with no zone",
+   eventAllowed({camera:"rua", label:"person", zones:[]}, filter), false)
+eq("eventAllowed wrong label",
+   eventAllowed({camera:"rua", label:"car", zones:["frente_garagem"]}, filter), false)
+eq("eventAllowed no filter keeps the old meaning",
+   eventAllowed({camera:"rua", label:"car", zones:["Asfalto"]}), true)
+eq("eventAllowed allowAll",
+   eventAllowed({camera:"x", label:"person", zones:["anything"]}, {allowlist:[], allowAll:true}), true)
+
+const mixed = [
+  {id:"1", camera:"rua", label:"person", zones:["Asfalto"], start_time: now-10},
+  {id:"2", camera:"rua", label:"person", zones:["frente_garagem"], start_time: now-40},
+  {id:"3", camera:"rua", label:"person", zones:["frente_garagem"], start_time: now-4000},
+]
+eq("allowedEvents", allowedEvents(mixed, filter).map(e => e.id), ["2","3"])
+eq("allowedEvents limit", allowedEvents(mixed, filter, 1).map(e => e.id), ["2"])
+eq("countRecent honours the allowlist", countRecent(mixed, 10, 0, now, filter), 1)
+eq("countRecent without a filter counts any zone", countRecent(mixed, 10, 0, now), 2)
+// The tile badge must not show a zone the user deselected, even when it is the
+// newest thing that camera saw.
+eq("latestByCamera skips a disallowed newer event", latestByCamera(mixed, filter).rua.id, "2")
+eq("latestByCamera without a filter takes the newest", latestByCamera(mixed).rua.id, "1")

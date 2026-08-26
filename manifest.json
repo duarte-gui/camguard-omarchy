@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.duarte-gui.camguard",
   "name": "CamGuard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "duarte-gui",
   "license": "MIT",
-  "description": "Frigate NVR cameras in the Omarchy bar: a live snapshot grid, a floating always-on-top PiP with the real RTSP stream, and desktop alerts filtered by zone.",
+  "description": "Frigate NVR cameras in the Omarchy bar: a live snapshot grid, a floating always-on-top PiP with the real RTSP stream, and desktop alerts filtered by zone that replay the recording when you click them.",
   "kinds": [
     "bar-widget"
   ],
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "CamGuard",
-    "description": "Watch your Frigate cameras without leaving what you are doing: a 2x2 live grid in the bar, a floating picture-in-picture overlay, and notifications only for the zones you care about.",
+    "description": "Watch your Frigate cameras without leaving what you are doing: a 2x2 live grid in the bar, a floating picture-in-picture overlay that plays both the live stream and the recording of a detection, and notifications only for the zones you care about.",
     "category": "System",
     "aliases": [
       "camguard",
@@ -34,6 +34,8 @@
       "notifyEnabled": true,
       "notifyZones": "",
       "notifyLabels": "person",
+      "notifyOpens": "clip",
+      "clipWaitSec": 180,
       "notifyCooldownSec": 60,
       "badgeWindowMin": 10,
       "player": "native",
@@ -116,6 +118,27 @@
         "label": "Notify only for these objects",
         "defaultValue": "person",
         "description": "Comma-separated Frigate labels, for example person, car. Empty means any tracked object."
+      },
+      {
+        "key": "notifyOpens",
+        "type": "enum",
+        "label": "Clicking a notification",
+        "options": [
+          "clip",
+          "live"
+        ],
+        "defaultValue": "clip",
+        "description": "clip replays the recording of that detection in the overlay. Frigate only writes a clip once the event ends, so the overlay waits for it and says so. live jumps straight to the camera instead."
+      },
+      {
+        "key": "clipWaitSec",
+        "type": "integer",
+        "label": "Clip wait (seconds)",
+        "min": 15,
+        "max": 900,
+        "step": 15,
+        "defaultValue": 180,
+        "description": "How long to wait for Frigate to finish writing a clip before giving up. An event that ended and still has no clip is given up on much sooner, because its zone is not covered by that camera's record required_zones and no clip is ever coming."
       },
       {
         "key": "notifyCooldownSec",
