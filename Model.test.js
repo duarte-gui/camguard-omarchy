@@ -170,3 +170,16 @@ eq("countRecent without a filter counts any zone", countRecent(mixed, 10, 0, now
 // newest thing that camera saw.
 eq("latestByCamera skips a disallowed newer event", latestByCamera(mixed, filter).rua.id, "2")
 eq("latestByCamera without a filter takes the newest", latestByCamera(mixed).rua.id, "1")
+
+// --- the toast names the zone that raised the alert, not the first one -----
+//
+// Frigate lists zones in entry order. Someone who crossed the street on the
+// way to the garage has "Asfalto" first, but it was frente_garagem that got
+// through the allowlist, and that is what the headline must say.
+const crossed = {camera:"rua", label:"person", zones:["Asfalto", "marea", "frente_garagem"], start_time: Date.now()/1000 - 5}
+eq("alertZone picks the allowed zone", alertZone(crossed, filter), "frente_garagem")
+eq("alertZone without a filter takes the first", alertZone(crossed), "Asfalto")
+eq("alertZone no match falls back to the first", alertZone({camera:"rua", zones:["Asfalto","marea"]}, filter), "Asfalto")
+eq("headline names the allowed zone", eventHeadline(crossed, null, filter), "Person in Frente garagem")
+eq("headline without a filter keeps the old meaning", eventHeadline(crossed), "Person in Asfalto")
+eq("badgeText names the allowed zone", badgeText(crossed, 0, null, filter), "Frente garagem · now")

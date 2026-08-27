@@ -354,6 +354,7 @@ Panel {
                 event: root.service ? root.service.latestEventFor(modelData.name) : null
                 nowTick: root.service ? root.service.tick : 0
                 zoneLabels: root.service ? root.service.zoneLabels : null
+                eventFilter: root.service ? root.service.eventFilter : null
                 foreground: root.foreground
                 urgent: root.urgent
                 fontFamily: root.fontFamily
@@ -504,7 +505,8 @@ Panel {
 
                   Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: Model.eventHeadline(eventRow.modelData, root.service ? root.service.zoneLabels : null)
+                    text: Model.eventHeadline(eventRow.modelData, root.service ? root.service.zoneLabels : null,
+                        root.service ? root.service.eventFilter : null)
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
                     color: root.foreground
@@ -517,7 +519,8 @@ Panel {
                   text: (root.service ? root.service.cameraLabel(eventRow.modelData.camera) : "")
                     + " · " + Model.badgeText(eventRow.modelData,
                         root.service ? root.service.tick : 0,
-                        root.service ? root.service.zoneLabels : null)
+                        root.service ? root.service.zoneLabels : null,
+                        root.service ? root.service.eventFilter : null)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   color: root.dim

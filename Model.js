@@ -304,12 +304,29 @@ function titleCase(value) {
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
-// "Person in Gate" — the notification headline.
-function eventHeadline(event, zoneLabels) {
-  var label = titleCase(event && event.label)
+// The zone worth naming for an event: the first one the allowlist accepts.
+//
+// Frigate lists zones in the order the object entered them, so an object that
+// crossed the street on its way to the gate has the street first. Naming that
+// one would tell the user they were interrupted for a zone they unticked, when
+// it was the gate that raised the alert. With no filter, or when nothing in
+// the list matches, the first zone is the best there is.
+function alertZone(event, filter) {
   var zones = (event && event.zones) || []
-  if (zones.length === 0) return label || "Detection"
-  return (label || "Detection") + " in " + zoneDisplay(zoneLabels, event.camera, zones[0])
+  if (zones.length === 0) return ""
+  if (!filter) return zones[0]
+  for (var i = 0; i < zones.length; i++) {
+    if (matchesZones(filter.allowlist, event.camera, [zones[i]], filter.allowAll)) return zones[i]
+  }
+  return zones[0]
+}
+
+// "Person in Gate" — the notification headline.
+function eventHeadline(event, zoneLabels, filter) {
+  var label = titleCase(event && event.label)
+  var zone = alertZone(event, filter)
+  if (zone === "") return label || "Detection"
+  return (label || "Detection") + " in " + zoneDisplay(zoneLabels, event.camera, zone)
 }
 
 function eventBody(event, cameraLabel, nowSeconds) {
@@ -425,11 +442,11 @@ function clipPollDelay(attempt) {
 
 // Tile badge caption: which zone, how long ago. `tick` is the binding
 // dependency that keeps the "how long ago" part moving.
-function badgeText(event, tick, zoneLabels) {
+function badgeText(event, tick, zoneLabels, filter) {
   if (!event) return ""
-  var zones = event.zones || []
+  var zone = alertZone(event, filter)
   var when = relativeTime(event.start_time || 0, Date.now() / 1000)
-  return (zones.length > 0 ? zoneDisplay(zoneLabels, event.camera, zones[0]) + " · " : "") + when
+  return (zone !== "" ? zoneDisplay(zoneLabels, event.camera, zone) + " · " : "") + when
 }
 
 // Same deal: `tick` only exists so callers re-evaluate as time passes.

@@ -738,7 +738,7 @@ Item {
 
     if (imagePath !== "") args = args.concat(["--image", imagePath])
 
-    args.push(Model.eventHeadline(event, zoneLabels))
+    args.push(Model.eventHeadline(event, zoneLabels, eventFilter))
     args.push(Model.eventBody(event, cameraLabel(event.camera), nowSeconds()))
 
     // --exec takes the rest of the line as the click command's words and hands

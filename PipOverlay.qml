@@ -65,7 +65,7 @@ Item {
   readonly property string replayTitle: {
     if (!replayEvent) return label + "  replay"
     var when = Qt.formatDateTime(new Date((replayEvent.start_time || 0) * 1000), "HH:mm:ss")
-    var headline = Model.eventHeadline(replayEvent, service ? service.zoneLabels : null)
+    var headline = Model.eventHeadline(replayEvent, service ? service.zoneLabels : null, service ? service.eventFilter : null)
     return headline + "  " + label + " · " + when
   }
 
