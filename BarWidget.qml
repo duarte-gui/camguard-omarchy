@@ -65,7 +65,26 @@ BarWidget {
 
   // -------------------------------------------------------------------- pip
 
+  // Everything overlay-shaped must run on the leader — it is the only
+  // instance whose pipLoader is active. The bar builds one widget per
+  // monitor, so a click in the panel on a second display lands on that
+  // display's widget, which would set pipCamera on a Service that owns no
+  // overlay: "ok" comes back and nothing appears. Each entry point a panel
+  // can reach hands itself to the leader instead.
+  function pipOwner() {
+    if (isLeader) return root
+    var items = bar && typeof bar.moduleWidgets === "function"
+      ? bar.moduleWidgets(moduleName) : []
+    for (var i = 0; i < items.length; i++) {
+      if (items[i] && items[i].isLeader) return items[i]
+    }
+    return root
+  }
+
   function openPip(cameraName) {
+    var owner = pipOwner()
+    if (owner !== root) return owner.openPip(cameraName)
+
     service.endReplay()
     var target = String(cameraName || "")
     target = target === "" ? defaultPipCamera() : service.resolveCamera(target)
@@ -87,6 +106,8 @@ BarWidget {
   }
 
   function closePip() {
+    var owner = pipOwner()
+    if (owner !== root) { owner.closePip(); return }
     service.endReplay()
     if (service.player === "mpv") mpvProcess.running = false
     else if (pipLoader.item) pipLoader.item.hide()
@@ -94,6 +115,8 @@ BarWidget {
   }
 
   function togglePip(cameraName) {
+    var owner = pipOwner()
+    if (owner !== root) { owner.togglePip(cameraName); return }
     var target = service.resolveCamera(String(cameraName || ""))
     if (root.pipOpen && (target === "" || target === service.pipCamera)) closePip()
     else openPip(String(cameraName || ""))
@@ -113,6 +136,8 @@ BarWidget {
   // is called from a notification, so the Service starts a wait and the overlay
   // shows what it is waiting for.
   function openClip(eventId, cameraHint) {
+    var owner = pipOwner()
+    if (owner !== root) return owner.openClip(eventId, cameraHint)
     var result = service.requestReplay(eventId, cameraHint)
     if (result !== "ok") return result
 
