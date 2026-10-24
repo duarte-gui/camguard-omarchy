@@ -18,6 +18,9 @@ solves the same problem on Android TV sticks that refuse picture-in-picture.
 - A reachable Frigate instance — tested against **Frigate 0.17**
 - `qt6-multimedia-ffmpeg`, for the overlay's RTSP playback. It ships with
   Omarchy; `pacman -Q qt6-multimedia-ffmpeg` confirms it.
+- `python-gobject`, for sending notifications. It also ships with Omarchy;
+  `pacman -Q python-gobject` confirms it. Without it, toasts still arrive,
+  but they only say "New activity on your cameras".
 
 Frigate's go2rtc restream (port `8554`) must be reachable for the overlay.
 The grid needs only the Frigate HTTP API.
@@ -165,6 +168,7 @@ omarchy-shell camguard replay          # replay whatever alerted last
 omarchy-shell camguard live            # leave the replay for the live stream
 omarchy-shell camguard replayStatus    # "waiting <id> 12s · waiting for the clip…"
 omarchy-shell camguard status          # "4 cameras · 2 detections"
+omarchy-shell camguard notifyTest      # a sample toast, to check they arrive
 omarchy-shell camguard cameras         # the resolved camera list, for debugging
 ```
 
@@ -229,6 +233,12 @@ The native player needs none of that and is the default.
   carrying broker credentials for no extra signal. Events are deduplicated by
   id, and the first poll after a restart only records what already happened —
   enabling the widget never replays history as a burst of toasts.
+- **What the cameras saw stays off the command line.** Any local account can
+  read a process's arguments through `/proc`. So a toast's text goes to
+  `notify.py` on stdin, and that script calls `Notify` over D-Bus itself
+  instead of going through `omarchy-notification-send`. Event URLs reach curl
+  the same way, through `curl -K -`, and snapshots and clips are cached under
+  a hash of the event id, never under the id itself, which is a timestamp.
 - **One poller per machine.** Omarchy builds one widget instance per monitor,
   so only the instance on the first screen polls and owns the overlay. Without
   that, a second display would mean two of every notification.

@@ -295,14 +295,17 @@ Item {
   // ---------------------------------------------------------------- requests
 
   // One process per concurrent request so a slow call never starves another.
-  // Frigate needs no auth on the LAN, and the URL travels as an argv entry
-  // rather than through a shell, so nothing here can be quoted into a command.
-  // --noproxy matters: a LAN address must never be sent to a configured proxy.
+  // Frigate needs no auth on the LAN. The URL goes to curl on stdin (-K -),
+  // never through a shell and never in argv: an event URL carries the event
+  // id, which is when something was seen, and argv is readable by every local
+  // account. --noproxy matters: a LAN address must never be sent to a
+  // configured proxy.
   component Request: Process {
     id: request
 
     property var handler: null
     property var pending: null
+    property string config: ""
 
     stdout: StdioCollector { id: collector; waitForEnd: true }
     stderr: StdioCollector { id: errors; waitForEnd: true }
@@ -339,11 +342,20 @@ Item {
       if (!next) return
 
       request.handler = next.done
+      request.config = Model.curlConfig({ url: next.url })
       request.command = [
         "curl", "-sS", "--max-time", String(next.timeout), "--noproxy", "*",
-        "-w", "\n%{http_code}", next.url
+        "-w", "\n%{http_code}", "-K", "-"
       ]
+      request.stdinEnabled = true
       request.running = true
+    }
+
+    // Disabling stdin is what closes it; curl reads its config to EOF.
+    onStarted: {
+      request.write(request.config)
+      request.config = ""
+      request.stdinEnabled = false
     }
 
     onExited: function(exitCode) {
@@ -607,12 +619,15 @@ Item {
 
     replayState = "fetching"
     replayMessage = "fetching the clip…"
-    clipDownload.path = cacheDir + "/"
-      + String(replayEventId).replace(/[^A-Za-z0-9._-]/g, "_") + ".mp4"
+    clipDownload.path = cacheFile(replayEventId, ".mp4")
+    clipDownload.config = Model.curlConfig({
+      url: Model.eventClipUrl(frigateUrl, replayEventId),
+      output: clipDownload.path
+    })
     clipDownload.command = [
-      "curl", "-fsS", "--max-time", "60", "--noproxy", "*", "--create-dirs",
-      "-o", clipDownload.path, Model.eventClipUrl(frigateUrl, replayEventId)
+      "curl", "-fsS", "--max-time", "60", "--noproxy", "*", "--create-dirs", "-K", "-"
     ]
+    clipDownload.stdinEnabled = true
     clipDownload.running = true
   }
 
@@ -621,6 +636,13 @@ Item {
     running: false
 
     property string path: ""
+    property string config: ""
+
+    onStarted: {
+      write(config)
+      config = ""
+      stdinEnabled = false
+    }
 
     onExited: function(exitCode) {
       if (!service.replayActive) return
@@ -733,16 +755,19 @@ Item {
 
     var event = pendingNotifications.shift()
     snapshotDownload.event = event
-    snapshotDownload.imagePath = cacheDir + "/" + String(event.id).replace(/[^A-Za-z0-9._-]/g, "_") + ".jpg"
+    snapshotDownload.imagePath = cacheFile(event.id, ".jpg")
 
     // The snapshot is fetched to a file because the notification daemon takes
     // an image path; a missing file only costs us the thumbnail.
     if (event.has_snapshot) {
+      snapshotDownload.config = Model.curlConfig({
+        url: Model.eventSnapshotUrl(frigateUrl, event.id),
+        output: snapshotDownload.imagePath
+      })
       snapshotDownload.command = [
-        "curl", "-sS", "--max-time", "8", "--noproxy", "*", "--create-dirs",
-        "-o", snapshotDownload.imagePath,
-        Model.eventSnapshotUrl(frigateUrl, event.id)
+        "curl", "-sS", "--max-time", "8", "--noproxy", "*", "--create-dirs", "-K", "-"
       ]
+      snapshotDownload.stdinEnabled = true
       snapshotDownload.running = true
     } else {
       sendNotification(event, "")
@@ -756,6 +781,13 @@ Item {
 
     property var event: null
     property string imagePath: ""
+    property string config: ""
+
+    onStarted: {
+      write(config)
+      config = ""
+      stdinEnabled = false
+    }
 
     onExited: function(exitCode) {
       service.sendNotification(event, exitCode === 0 ? imagePath : "")
@@ -765,31 +797,88 @@ Item {
     }
   }
 
-  // Sent detached rather than through a Process: the toast should outlive a
-  // plugin hot reload, and it has nothing to report back.
   function sendNotification(event, imagePath) {
     if (!event) return
 
-    var args = [
-      "omarchy-notification-send",
-      "--app-name", "CamGuard",
-      "-u", "critical",
-      "-g", "󰞮"
-    ]
+    toast({
+      summary: Model.eventHeadline(event, zoneLabels, eventFilter),
+      body: Model.eventBody(event, cameraLabel(event.camera), nowSeconds()),
+      urgency: "critical",
+      image: imagePath,
+      // The click command's words, run by the daemon as data and never
+      // re-parsed — which is why nothing here goes through shellQuote.
+      exec: Model.notifyExecArgv(notifyOpens, event.id, event.camera)
+    })
+  }
 
-    if (imagePath !== "") args = args.concat(["--image", imagePath])
+  // Every CamGuard toast goes through notify.py, which reads it as one JSON line
+  // on stdin and calls Notify over D-Bus itself. omarchy-notification-send
+  // would put "Person in Gate · Garage · 12s ago" into its own argv and then
+  // busctl's, and any local account can read a process's arguments through
+  // /proc — what the cameras saw is not theirs to read.
+  property var toastQueue: []
+  readonly property string notifyScript:
+    decodeURIComponent(String(Qt.resolvedUrl("notify.py")).replace(/^file:\/\//, ""))
 
-    args.push(Model.eventHeadline(event, zoneLabels, eventFilter))
-    args.push(Model.eventBody(event, cameraLabel(event.camera), nowSeconds()))
+  function toast(note) {
+    var next = toastQueue.slice()
+    next.push({
+      app: "CamGuard",
+      glyph: "󰞮",
+      summary: String(note.summary || "CamGuard"),
+      body: String(note.body || ""),
+      urgency: note.urgency || "normal",
+      image: note.image || "",
+      exec: note.exec || []
+    })
+    toastQueue = next
+    if (!toastProcess.running) sendNextToast()
+  }
 
-    // --exec takes the rest of the line as the click command's words and hands
-    // them to the daemon as data it never re-parses, so it has to come last and
-    // it has to be separate arguments. One quoted string is rejected outright,
-    // and quoting an argument here would arrive with the quotes still in it —
-    // which is why nothing below goes through shellQuote.
-    args = args.concat(["--exec"], Model.notifyExecArgv(notifyOpens, event.id, event.camera))
+  function sendNextToast() {
+    if (toastQueue.length === 0) return
+    toastProcess.note = toastQueue[0]
+    toastQueue = toastQueue.slice(1)
+    toastProcess.stdinEnabled = true
+    toastProcess.running = true
+  }
 
-    Quickshell.execDetached(args)
+  Process {
+    id: toastProcess
+    running: false
+    command: ["python3", "-I", service.notifyScript]
+
+    property var note: null
+
+    onStarted: {
+      write(JSON.stringify(note) + "\n")
+      stdinEnabled = false
+    }
+
+    onExited: function(exitCode) {
+      // python-gobject missing, or no notification daemon answering. A toast
+      // that says nothing is still worth more than none at all, and it is
+      // the only kind that may travel as arguments. Its click replays the
+      // newest alert rather than naming this one, for the same reason.
+      if (exitCode !== 0) {
+        console.warn("camguard: notify.py failed (" + exitCode + "), sending a generic toast")
+        Quickshell.execDetached([
+          "omarchy-notification-send", "--app-name", "CamGuard",
+          "-u", note && note.urgency === "critical" ? "critical" : "normal",
+          "-g", "󰞮", "CamGuard", "New activity on your cameras",
+          "--exec", "omarchy-shell", "-q", "camguard", "replay"
+        ])
+      }
+      note = null
+      Qt.callLater(service.sendNextToast)
+    }
+  }
+
+  // A file name for an event's snapshot or clip. The event id is its start
+  // time, and the path reaches the notification and, in mpv mode, the
+  // player's argv; a hash says nothing about when.
+  function cacheFile(eventId, extension) {
+    return cacheDir + "/" + Qt.md5("camguard:" + String(eventId)) + extension
   }
 
   // ------------------------------------------------------------------ timers

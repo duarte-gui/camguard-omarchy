@@ -555,16 +555,34 @@ function pipGeometry(screenWidth, screenHeight, widthPercent, margin) {
   return { width: width, height: height }
 }
 
+// curl options as a config file, for `curl -K -` to read from stdin. An event
+// URL carries the event id, which is its start time, and an argv entry is
+// readable by every local account through /proc — stdin is not. Values are
+// double-quoted, the one form in which curl's config parser honours escapes.
+function curlConfig(options) {
+  var lines = []
+  for (var key in options) {
+    var value = String(options[key] === undefined || options[key] === null ? "" : options[key])
+    lines.push(key + " = \"" + value
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, "\\\"")
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\r")
+      .replace(/\t/g, "\\t") + "\"")
+  }
+  return lines.join("\n") + "\n"
+}
+
 function shellQuote(value) {
   return "'" + String(value === undefined || value === null ? "" : value).replace(/'/g, "'\\''") + "'"
 }
 
 // What clicking the notification runs, as an argv vector.
 //
-// omarchy-notification-send takes --exec as separate words and passes them to
-// the daemon as data that is never re-parsed. One quoted string is rejected
-// outright, and shell-quoting an argument here would travel as literal quote
-// characters — so nothing in this vector may be passed through shellQuote.
+// notify.py hands these words to the Omarchy daemon as its omarchy-exec-argv
+// hint, which runs them as-is and never re-parses them. Shell-quoting an
+// argument here would travel as literal quote characters — so nothing in this
+// vector may be passed through shellQuote.
 function notifyExecArgv(mode, eventId, camera) {
   if (mode === "live" || !eventId)
     return ["omarchy-shell", "-q", "camguard", "pip", String(camera || "")]

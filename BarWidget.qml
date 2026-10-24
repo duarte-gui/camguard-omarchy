@@ -201,10 +201,7 @@ BarWidget {
   }
 
   function notifyReplayFailed() {
-    Quickshell.execDetached([
-      "omarchy-notification-send", "--app-name", "CamGuard", "-u", "low",
-      "CamGuard", service.replayMessage
-    ])
+    service.toast({ summary: "CamGuard", body: service.replayMessage, urgency: "low" })
     service.endReplay()
   }
 
@@ -395,6 +392,13 @@ BarWidget {
         + (service.replayMessage !== "" ? " · " + service.replayMessage : "")
     }
     function setup(): string { root.openSetup(); return "ok" }
+    // A sample toast through the same path a detection takes, for checking
+    // that notifications arrive at all.
+    function notifyTest(): string {
+      service.toast({ summary: "CamGuard", body: "Notifications work.", urgency: "low",
+        exec: ["omarchy-shell", "-q", "camguard", "toggle"] })
+      return "ok"
+    }
     function status(): string { return root.statusText }
 
     // Useful for scripting, and the fastest way to see which camera list is in

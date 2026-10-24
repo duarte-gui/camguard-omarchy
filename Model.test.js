@@ -111,9 +111,8 @@ eq("eventClipUrl", eventClipUrl("http://h:5000", "1787700603.795232-hesuzw"),
    "http://h:5000/api/events/1787700603.795232-hesuzw/clip.mp4")
 
 // The notification's click action is an argv vector, never a shell string:
-// omarchy-notification-send rejects a single word containing a space, and it
-// hands the words to the daemon as data. A quoted argument would arrive with
-// its quotes intact.
+// the Omarchy daemon runs the words as given, as data. A quoted argument would
+// arrive with its quotes intact.
 eq("notifyExecArgv clip", notifyExecArgv("clip", "1787700603.795232-hesuzw", "Garagem"),
    ["omarchy-shell","-q","camguard","clip","1787700603.795232-hesuzw"])
 eq("notifyExecArgv live", notifyExecArgv("live", "1787700603.795232-hesuzw", "Garagem"),
@@ -250,3 +249,8 @@ eq("staleZones none", staleZones(parseZoneAllowlist("rua:frente_garagem, portao"
 eq("staleZones wrong camera", staleZones(parseZoneAllowlist("Garagem:portao, rua:FRENTE_garagem"), known), ["garagem:portao"])
 eq("staleZones all, after switching Frigate", staleZones(parseZoneAllowlist("rua:frente_garagem"), []), ["rua:frente_garagem"])
 eq("failure: http on the TLS port", describeFailure(0, 400, ""), "that port expects https; try port 5000 instead")
+
+// Event URLs go to curl on stdin, never in argv.
+eq("curlConfig", curlConfig({url: "http://h:5000/api/events/1.2-ab/clip.mp4", output: "/run/x/a b.mp4"}),
+  'url = "http://h:5000/api/events/1.2-ab/clip.mp4"\noutput = "/run/x/a b.mp4"\n')
+eq("curlConfig escapes", curlConfig({url: 'a"b\\c\nd'}), 'url = "a\\"b\\\\c\\nd"\n')
