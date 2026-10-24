@@ -36,22 +36,36 @@ cd camguard-omarchy
 ./install.sh
 ```
 
-Then point it at your Frigate. Everything is stored inline on the widget's
-entry in `~/.config/omarchy/shell.json`:
+Then point it at your Frigate: open the panel, press the gear (or `s`), and
+type its IP into **Frigate address**. Enter saves and reconnects, and the line
+under the field says whether it worked, and if not why. Until Frigate has
+answered once, the bar icon opens straight onto that page. A bare IP or
+hostname gets Frigate's port 5000, and the overlay follows the same host on
+go2rtc's 8554.
+
+Everything is stored inline on the widget's entry in
+`~/.config/omarchy/shell.json`, which is also where the rest is set by hand:
 
 ```jsonc
 {
   "id": "io.github.duarte-gui.camguard",
-  "frigateUrl": "http://frigate.local:5000",
-  "rtspUrl": "rtsp://frigate.local:8554",
+  "frigateUrl": "192.168.1.10",
   "cameras": "street:street_sub:street_main|Street, Garage:garage_sub:garage_main|Garage"
 }
 ```
 
-Leave `cameras` out and CamGuard reads the list from `/api/config` instead.
-That works, but it can only guess a camera's go2rtc stream names from the
-ffmpeg input paths, so cameras whose sources are not go2rtc restreams end up
-with a stream name that does not exist. Spelling the list out is worth it.
+Leave `cameras` out and CamGuard shows every enabled camera Frigate has. The
+overlay needs each camera's go2rtc stream names, and those are found from
+`/api/config`: an input that is a restream names its stream outright; one that
+reads a camera directly is matched to the go2rtc stream reading the same
+source; failing both, a stream named `<camera>`, `<camera>_sub` or
+`<camera>_main` is used. The `detect` input becomes the light stream and
+`record` the full one.
+
+**Cameras in the grid**, on the settings page, picks which of them to show.
+Ticking or unticking one writes the list to `cameras`. Cameras that were
+already there keep the labels and streams you gave them, and the list stays in
+the same order. `omarchy-shell camguard cameras` prints what got resolved.
 
 ## Using it
 
@@ -86,8 +100,8 @@ Copy those into `~/.config/hypr/bindings.lua`.
 
 ### Which zones raise an alert
 
-The gear button in the panel — or `omarchy-shell camguard setup` — opens a
-picker listing every zone Frigate knows about, per camera. Tick the ones worth
+The gear button in the panel — or `omarchy-shell camguard setup` — opens the
+settings page, which has a picker listing every zone Frigate knows about, per camera. Tick the ones worth
 interrupting you for.
 
 Zones drawn in the Frigate UI get a generated key like `zone_a6b95840`; the
@@ -105,6 +119,13 @@ the caption on each tile, and the list of recent alerts in the panel. What the
 panel displays is what would have interrupted you, and nothing else.
 
 With nothing configured, every zone alerts. Untick them all and nothing does.
+
+A picked zone that this Frigate does not have is flagged in red under the
+picker, with a button to forget it. That is what happens after pointing the
+widget at another Frigate, or after renaming a zone. When none of the picked
+zones exist any more, nothing can alert, and the camera page says so too.
+Forgetting them then clears the setting, so every zone alerts until you pick
+again.
 
 ### Replaying a detection
 
@@ -153,8 +174,8 @@ Every key goes inline on the widget's entry in `shell.json`.
 
 | key | default | what it does |
 |---|---|---|
-| `frigateUrl` | `http://frigate.local:5000` | Frigate HTTP API |
-| `rtspUrl` | `rtsp://frigate.local:8554` | go2rtc restream, for the overlay |
+| `frigateUrl` | `http://frigate.local:5000` | Frigate HTTP API — an IP, a hostname, or a full URL; the gear button writes it |
+| `rtspUrl` | *(unset — Frigate's host on 8554)* | go2rtc restream, for the overlay; only needed when it lives elsewhere |
 | `cameras` | *(unset — ask Frigate)* | `frigateName:sub[:main]\|Label`, comma separated |
 | `snapshotIntervalMs` | `1000` | grid refresh, only while the panel is open |
 | `snapshotHeight` | `270` | height Frigate scales snapshots to |

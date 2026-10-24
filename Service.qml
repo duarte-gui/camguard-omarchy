@@ -33,8 +33,14 @@ Item {
     return value === undefined || value === null ? fallback : value
   }
 
-  readonly property string frigateUrl: Model.trimSlashes(setting("frigateUrl", "http://frigate.local:5000"))
-  readonly property string rtspBase: Model.trimSlashes(setting("rtspUrl", "rtsp://frigate.local:8554"))
+  // A bare IP is accepted here too, so a hand-edited "192.168.1.10" in
+  // shell.json works the same as one typed into the panel.
+  readonly property string frigateUrl: Model.normalizeFrigateUrl(setting("frigateUrl", "http://frigate.local:5000"))
+  // Empty follows the Frigate address: go2rtc runs inside the Frigate
+  // container, so the restream is the same host on 8554. Only a restream
+  // published somewhere else needs spelling out.
+  readonly property string rtspUrlSetting: Model.trimSlashes(setting("rtspUrl", ""))
+  readonly property string rtspBase: rtspUrlSetting !== "" ? rtspUrlSetting : Model.rtspBaseFor(frigateUrl)
   // The manifest's `defaults` block is inert — a shell.json entry is stored
   // inline and never deep-merged with it — so the real defaults are the
   // fallbacks here, and the two must be edited together.
@@ -120,6 +126,18 @@ Item {
   readonly property var cameras: configuredCameras.length > 0 ? configuredCameras : discoveredCameras
   readonly property var zoneLabels: Model.zoneLabelMap(zonesAvailable)
 
+  // Allowlist entries naming a zone this Frigate does not have — what is left
+  // over after pointing the widget at another Frigate, or after a zone was
+  // renamed. Only judged once the config is in, or every entry looks stale
+  // for the first few seconds after startup.
+  readonly property var staleZoneEntries: configLoaded && notifyZonesExplicit
+    ? Model.staleZones(zoneAllowlist, zonesAvailable)
+    : []
+  // Every picked zone is gone, so nothing can alert. The panel says so rather
+  // than letting the alarm go quiet without a word.
+  readonly property bool alertsOrphaned: zoneAllowlist.length > 0
+    && staleZoneEntries.length === zoneAllowlist.length
+
   // The zone allowlist and the label filter are what decide whether something
   // is worth interrupting you for, so they decide what the badge, the tile
   // captions and the panel list show too. Anything else means the bar lights up
@@ -138,8 +156,11 @@ Item {
   readonly property int recentCount: Model.countRecent(events, badgeWindowMin, tick, nowSeconds(), eventFilter)
 
   readonly property string statusLine: {
+    // Before the first answer the error is the news: "connecting…" forever
+    // tells you nothing about a mistyped IP.
+    if (!online && lastError !== "") return lastError
     if (!everConnected) return "connecting…"
-    if (!online) return lastError !== "" ? lastError : "Frigate unreachable"
+    if (!online) return "Frigate unreachable"
     var count = cameras.length
     return count + (count === 1 ? " camera" : " cameras")
   }
@@ -189,8 +210,15 @@ Item {
     lastNotifyAt = ({})
     pendingNotifications = []
     events = []
+    // What the old Frigate said about cameras and zones is not true of the new
+    // one, and keeping it would light up the zone warning with the old names.
+    discoveredCameras = []
+    zonesAvailable = []
     online = false
     everConnected = false
+    // The old address's error would otherwise sit under the new one until the
+    // first poll answers.
+    lastError = ""
     refresh()
   }
 
@@ -371,10 +399,11 @@ Item {
     configRequest.send(Model.configUrl(frigateUrl), 10, function(code, status, data, error) {
       if (code !== 0 || status !== 200 || !data) return
 
-      configLoaded = true
-
       discoveredCameras = Model.camerasFromConfig(data)
       zonesAvailable = Model.zonesFromConfig(data)
+      // After the zones, so the stale-zone check never sees the flag without
+      // the list it is about.
+      configLoaded = true
 
       // Camera names are case-sensitive in Frigate's URLs, and "Garage" with a
       // capital G is exactly the kind of thing that silently 404s into a tile
@@ -384,6 +413,18 @@ Item {
         if (known.indexOf(configuredCameras[i].name) < 0)
           console.warn("camguard: Frigate has no camera named '" + configuredCameras[i].name
             + "' (it knows: " + known.join(", ") + ")")
+      }
+
+      // The other half of the same mistake: a stream name go2rtc does not
+      // publish is an overlay that never starts.
+      var streams = Model.go2rtcStreamsFromConfig(data)
+      if (Object.keys(streams).length === 0) return
+      for (var j = 0; j < configuredCameras.length; j++) {
+        var cam = configuredCameras[j]
+        var missing = [cam.sub, cam.main].filter(function(name) { return !(name in streams) })
+        if (missing.length > 0)
+          console.warn("camguard: go2rtc has no stream named '" + missing.join("', '") + "' for camera '"
+            + cam.name + "'")
       }
     })
   }
@@ -396,7 +437,7 @@ Item {
     eventsRequest.send(Model.eventsUrl(frigateUrl, after, 50), 10, function(code, status, data, error) {
       if (code !== 0 || status !== 200 || !data) {
         online = false
-        lastError = error !== "" ? error : ("Frigate unreachable (HTTP " + status + ")")
+        lastError = Model.describeFailure(code, status, error)
         return
       }
 

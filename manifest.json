@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.duarte-gui.camguard",
   "name": "CamGuard",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "duarte-gui",
   "license": "MIT",
   "description": "Frigate NVR cameras in the Omarchy bar: a live snapshot grid, a floating always-on-top PiP with the real RTSP stream, and desktop alerts filtered by zone that replay the recording when you click them.",
@@ -26,7 +26,7 @@
     "defaultSection": "right",
     "defaults": {
       "frigateUrl": "http://frigate.local:5000",
-      "rtspUrl": "rtsp://frigate.local:8554",
+      "rtspUrl": "",
       "cameras": "",
       "snapshotIntervalMs": 1000,
       "snapshotHeight": 270,
@@ -50,16 +50,16 @@
       {
         "key": "frigateUrl",
         "type": "string",
-        "label": "Frigate URL",
+        "label": "Frigate address",
         "defaultValue": "http://frigate.local:5000",
-        "description": "Base address of the Frigate web API, for example http://192.168.0.10:5000. Snapshots, events and camera health all come from here."
+        "description": "Where Frigate is: an IP such as 192.168.0.10, a hostname, or a full URL. A bare IP or hostname gets Frigate's port 5000. Snapshots, events and camera health all come from here. The gear button in the panel edits it."
       },
       {
         "key": "rtspUrl",
         "type": "string",
         "label": "go2rtc RTSP URL",
-        "defaultValue": "rtsp://frigate.local:8554",
-        "description": "Base address of the go2rtc restream bundled with Frigate. Used only by the picture-in-picture overlay."
+        "defaultValue": "",
+        "description": "Base address of the go2rtc restream bundled with Frigate, used only by the picture-in-picture overlay. Empty means the Frigate address's host on port 8554, which is right unless the restream is published somewhere else."
       },
       {
         "key": "cameras",

@@ -69,36 +69,167 @@ function parseCameras(spec) {
     .filter(function(cam) { return cam !== null })
 }
 
-// Cameras discovered from /api/config, used when the setting is left empty.
-// Frigate names its restreams after the ffmpeg input paths, so the best guess
-// for a preview stream is the input carrying the "detect" role.
+// Cameras discovered from /api/config, used when the setting is left empty and
+// as the options of the camera picker. The "detect" input is the light stream
+// and "record" the full one; what takes work is finding the go2rtc stream that
+// carries each, because the overlay can only play a stream go2rtc publishes.
+// In order of how sure the answer is:
+//
+//   1. the input is a restream, rtsp://127.0.0.1:8554/<stream>
+//   2. the input reads the same source as a go2rtc stream does — a camera that
+//      pulls straight from the DVR while go2rtc republishes that same URL
+//   3. a go2rtc stream named after the camera: name, name_sub, name_main
+//
+// /api/config masks credentials as *:* in both places, identically, which is
+// what makes the source comparison in 2 possible at all.
 function camerasFromConfig(config) {
   var cameras = (config && config.cameras) || {}
+  var streams = go2rtcStreamsFromConfig(config)
   var out = []
 
   for (var name in cameras) {
     var cam = cameras[name] || {}
+    if (cam.enabled === false) continue
+
     var inputs = (cam.ffmpeg && cam.ffmpeg.inputs) || []
     var detect = ""
     var record = ""
 
     for (var i = 0; i < inputs.length; i++) {
       var roles = inputs[i].roles || []
-      var stream = go2rtcStreamFromPath(inputs[i].path)
+      var stream = go2rtcStreamFromPath(inputs[i].path) || streamWithSource(streams, inputs[i].path)
       if (stream === "") continue
       if (roles.indexOf("detect") >= 0 && detect === "") detect = stream
       if (roles.indexOf("record") >= 0 && record === "") record = stream
     }
 
+    if (detect === "") detect = streamNamed(streams, name, ["_sub", "_detect", ""])
+    if (record === "") record = streamNamed(streams, name, ["_main", "_record", ""])
+
     out.push({
       name: name,
       sub: detect || record || name,
       main: record || detect || name,
-      label: name
+      label: cam.friendly_name ? String(cam.friendly_name) : titleCase(name)
     })
   }
 
   out.sort(function(a, b) { return a.name.localeCompare(b.name) })
+  return out
+}
+
+// go2rtc's streams as { name: [source, ...] }. A stream may be one source or a
+// list of them, and a source may carry go2rtc's "ffmpeg:" prefix or "#option"
+// suffixes, neither of which is part of the address being read.
+function go2rtcStreamsFromConfig(config) {
+  var streams = (config && config.go2rtc && config.go2rtc.streams) || {}
+  var out = ({})
+
+  for (var name in streams) {
+    var value = streams[name]
+    var list = typeof value === "string" ? [value] : (value && value.length !== undefined ? value : [])
+    out[name] = []
+    for (var i = 0; i < list.length; i++) out[name].push(streamSource(list[i]))
+  }
+
+  return out
+}
+
+function streamSource(value) {
+  return String(value || "").trim().replace(/^ffmpeg:/, "").replace(/#.*$/, "")
+}
+
+function streamWithSource(streams, path) {
+  var wanted = streamSource(path)
+  if (wanted === "") return ""
+
+  for (var name in streams) {
+    if (streams[name].indexOf(wanted) >= 0) return name
+  }
+  return ""
+}
+
+// Case-insensitive, because Frigate camera names and go2rtc stream names are
+// typed by hand in two different places: "Garagem" is served by "garagem_sub".
+function streamNamed(streams, camera, suffixes) {
+  var base = String(camera || "").toLowerCase()
+  for (var i = 0; i < suffixes.length; i++) {
+    for (var name in streams) {
+      if (name.toLowerCase() === base + suffixes[i]) return name
+    }
+  }
+  return ""
+}
+
+// The inverse of parseCamera, for writing a picked list back to shell.json.
+// The parts it would fill in by default are left out, so the result reads
+// like something a person wrote; "," and "|" cannot appear in a label because
+// they are the format's own separators.
+function cameraSpec(camera) {
+  var text = camera.name
+  if (camera.sub !== camera.name || camera.main !== camera.sub) text += ":" + camera.sub
+  if (camera.main !== camera.sub) text += ":" + camera.main
+
+  var label = String(camera.label || "").replace(/[,|]/g, " ").trim()
+  if (label !== "" && label !== camera.name) text += "|" + label
+  return text
+}
+
+// What the camera picker writes. Cameras already in the list keep their
+// labels, streams and order — those were chosen by hand — and newly ticked
+// ones come after, as Frigate describes them.
+function pickCameras(current, discovered, names) {
+  var out = []
+  var i
+
+  for (i = 0; i < current.length; i++) {
+    if (names.indexOf(current[i].name) >= 0) out.push(current[i])
+  }
+
+  for (i = 0; i < discovered.length; i++) {
+    if (names.indexOf(discovered[i].name) < 0) continue
+    var taken = false
+    for (var j = 0; j < out.length; j++) {
+      if (out[j].name === discovered[i].name) taken = true
+    }
+    if (!taken) out.push(discovered[i])
+  }
+
+  return out.map(cameraSpec).join(", ")
+}
+
+// A failed poll, in words someone can act on. curl's own message names the
+// errno and nothing else; what the user needs to know is whether the address
+// is wrong, the machine is down, or something else entirely is answering.
+function describeFailure(exitCode, status, stderr) {
+  if (exitCode === 6) return "no machine by that name"
+  if (exitCode === 7) return "nothing answers on that address and port"
+  if (exitCode === 28) return "no answer — wrong IP, or the machine is off"
+  if (exitCode === 0 && status === 401) return "Frigate wants a login; use port 5000, which has none"
+  // nginx's answer to plain http on Frigate's TLS port, 8971.
+  if (exitCode === 0 && status === 400) return "that port expects https; try port 5000 instead"
+  if (exitCode === 0 && (status === 404 || status === 200)) return "something answers there, but it is not Frigate's API"
+  if (exitCode === 0 && status > 0) return "Frigate answered HTTP " + status
+  var text = String(stderr || "").replace(/^curl: \(\d+\)\s*/, "").trim()
+  return text !== "" ? text : "Frigate unreachable"
+}
+
+// A notify allowlist names zones on one Frigate. Pointed at another, every
+// entry may refer to a camera that is not there, and then nothing alerts —
+// silently, which is the worst way for an alarm to stop.
+//
+// An unscoped entry ("portao") is matched against zone names on any camera.
+function staleZones(allowlist, zones) {
+  var out = []
+  for (var i = 0; i < (allowlist || []).length; i++) {
+    var allowed = allowlist[i]
+    var found = false
+    for (var j = 0; j < (zones || []).length && !found; j++) {
+      if (String(zones[j].zone).toLowerCase() !== allowed.zone) continue
+      if (allowed.camera === "" || String(zones[j].camera).toLowerCase() === allowed.camera) found = true
+    }
+    if (!found) out.push(allowed.camera !== "" ? allowed.camera + ":" + allowed.zone : allowed.zone)
+  }
   return out
 }
 
@@ -147,6 +278,48 @@ function configUrl(base) {
 
 function rtspUrl(base, stream) {
   return trimSlashes(base) + "/" + encodeURIComponent(stream)
+}
+
+// Whatever someone types for "where is Frigate" -> the API base URL, or "" when
+// it cannot be one. A bare IP or hostname is by far the common answer, so it
+// gets Frigate's own port; a full URL is kept as given, because anything with a
+// scheme is likely behind a reverse proxy on a port of its own.
+//
+//   "192.168.1.10"        -> "http://192.168.1.10:5000"
+//   "frigate.local:8971"   -> "http://frigate.local:8971"
+//   "https://nvr.home/"    -> "https://nvr.home"
+function normalizeFrigateUrl(value) {
+  var text = trimSlashes(value)
+  if (text === "") return ""
+
+  var hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(text)
+  if (!hasScheme) text = "http://" + text
+
+  var match = text.match(/^(https?):\/\/([^\/\s:?#]+|\[[0-9a-f:.]+\])(:\d{1,5})?(\/[^\s?#]*)?$/i)
+  if (!match) return ""
+
+  var port = match[3] || (hasScheme ? "" : ":5000")
+  return match[1].toLowerCase() + "://" + match[2] + port + (match[4] || "")
+}
+
+// "http://192.168.1.10:5000" -> "192.168.1.10". The go2rtc restream lives on
+// the same machine as the API, which is what lets one address configure both.
+function urlHost(url) {
+  var match = String(url || "").match(/^[a-z][a-z0-9+.-]*:\/\/([^\/\s:?#]+|\[[0-9a-f:.]+\])/i)
+  return match ? match[1] : ""
+}
+
+function rtspBaseFor(frigateUrl) {
+  var host = urlHost(frigateUrl)
+  return host === "" ? "" : "rtsp://" + host + ":8554"
+}
+
+// The address field shows what was typed, not the URL it became: an IP with
+// Frigate's default port reads as just the IP.
+function frigateAddressText(url) {
+  var text = trimSlashes(url)
+  var match = text.match(/^http:\/\/([^\/]+):5000$/i)
+  return match ? match[1] : text
 }
 
 // "Garage:den, portao" -> [{camera: "garagem", zone: "den"}, {camera: "", zone: "gateway"}]

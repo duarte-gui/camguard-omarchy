@@ -183,3 +183,70 @@ eq("alertZone no match falls back to the first", alertZone({camera:"rua", zones:
 eq("headline names the allowed zone", eventHeadline(crossed, null, filter), "Person in Frente garagem")
 eq("headline without a filter keeps the old meaning", eventHeadline(crossed), "Person in Asfalto")
 eq("badgeText names the allowed zone", badgeText(crossed, 0, null, filter), "Frente garagem · now")
+
+// The Frigate address field: an IP is the common answer, a URL the exception.
+eq("normalize bare IP", normalizeFrigateUrl("192.168.1.10"), "http://192.168.1.10:5000")
+eq("normalize IP with port", normalizeFrigateUrl(" 192.168.1.10:8971 "), "http://192.168.1.10:8971")
+eq("normalize hostname", normalizeFrigateUrl("frigate.local"), "http://frigate.local:5000")
+eq("normalize full URL keeps its port", normalizeFrigateUrl("https://nvr.home/"), "https://nvr.home")
+eq("normalize URL with path", normalizeFrigateUrl("http://h:5000/frigate"), "http://h:5000/frigate")
+eq("normalize rejects rtsp", normalizeFrigateUrl("rtsp://h:8554"), "")
+eq("normalize rejects spaces", normalizeFrigateUrl("192.168 .1.1"), "")
+eq("normalize empty", normalizeFrigateUrl(""), "")
+eq("urlHost", urlHost("http://192.168.1.10:5000/x"), "192.168.1.10")
+eq("rtspBaseFor follows the API host", rtspBaseFor("https://nvr.home"), "rtsp://nvr.home:8554")
+eq("rtspBaseFor nothing", rtspBaseFor(""), "")
+eq("address text drops the default port", frigateAddressText("http://192.168.1.10:5000"), "192.168.1.10")
+eq("address text keeps anything else", frigateAddressText("http://h:8971"), "http://h:8971")
+
+// Discovery against the shape of a real Frigate 0.17 config: two cameras on restreams, one
+// reading the DVR directly while go2rtc republishes the same URL, and one whose
+// only stream is named after it.
+const realConfig = {
+  go2rtc: { streams: {
+    rua: "rtsp://*:*@192.168.20.13:554/cam/realmonitor?channel=2&subtype=0",
+    porta_frente_1: "rtsp://*:*@192.168.20.11:554/cam/realmonitor?channel=1&subtype=0",
+    porta_frente_2: "rtsp://*:*@192.168.20.11:554/cam/realmonitor?channel=1&subtype=1",
+    frente_praia_main: "rtsp://*:*@127.0.0.1:37777/cam/realmonitor?channel=2&subtype=0",
+    frente_praia_sub: ["ffmpeg:rtsp://*:*@127.0.0.1:37777/cam/realmonitor?channel=2&subtype=1#video=copy"],
+    garagem_main: "rtsp://*:*@192.168.20.12:554/cam/realmonitor?channel=1&subtype=0",
+    garagem_sub: "rtsp://*:*@192.168.20.12:554/cam/realmonitor?channel=1&subtype=1",
+  } },
+  cameras: {
+    rua: { ffmpeg: { inputs: [{ path: "rtsp://*:*@192.168.20.13:554/cam/realmonitor?channel=2&subtype=0", roles: ["record", "detect"] }] } },
+    porta_frente: { ffmpeg: { inputs: [
+      { path: "rtsp://127.0.0.1:8554/porta_frente_1", roles: ["record", "audio"] },
+      { path: "rtsp://127.0.0.1:8554/porta_frente_2", roles: ["detect"] } ] } },
+    Garagem: { friendly_name: "Garage", ffmpeg: { inputs: [] } },
+    frente_praia: { ffmpeg: { inputs: [
+      { path: "rtsp://*:*@127.0.0.1:37777/cam/realmonitor?channel=2&subtype=1", roles: ["detect"] },
+      { path: "rtsp://*:*@127.0.0.1:37777/cam/realmonitor?channel=2&subtype=0", roles: ["record"] } ] } },
+    off: { enabled: false, ffmpeg: { inputs: [] } },
+  },
+}
+const found = camerasFromConfig(realConfig)
+eq("discover skips disabled cameras", found.map(c => c.name), ["frente_praia", "Garagem", "porta_frente", "rua"])
+eq("discover by matching the source", found[0], {name:"frente_praia",sub:"frente_praia_sub",main:"frente_praia_main",label:"Frente praia"})
+eq("discover by name, any case, friendly label", found[1], {name:"Garagem",sub:"garagem_sub",main:"garagem_main",label:"Garage"})
+eq("discover from restream paths", found[2], {name:"porta_frente",sub:"porta_frente_2",main:"porta_frente_1",label:"Porta frente"})
+eq("discover one stream for both roles", found[3], {name:"rua",sub:"rua",main:"rua",label:"Rua"})
+
+eq("cameraSpec bare", cameraSpec({name:"rua",sub:"rua",main:"rua",label:"rua"}), "rua")
+eq("cameraSpec full", cameraSpec({name:"Garagem",sub:"garagem_sub",main:"garagem_main",label:"Garage"}), "Garagem:garagem_sub:garagem_main|Garage")
+eq("cameraSpec one stream, renamed", cameraSpec({name:"rua",sub:"rua_s",main:"rua_s",label:"Rua, front|x"}), "rua:rua_s|Rua  front x")
+eq("cameraSpec round-trips", parseCamera(cameraSpec(found[0])), found[0])
+
+const current = parseCameras("rua:rua|Street, Garagem:garagem_sub:garagem_main|Garage")
+eq("pick keeps hand-written entries and order", pickCameras(current, found, ["Garagem", "rua", "frente_praia"]),
+  "rua|Street, Garagem:garagem_sub:garagem_main|Garage, frente_praia:frente_praia_sub:frente_praia_main|Frente praia")
+eq("pick drops an unticked one", pickCameras(current, found, ["Garagem"]), "Garagem:garagem_sub:garagem_main|Garage")
+
+eq("failure: timeout", describeFailure(28, 0, "curl: (28) Connection timed out"), "no answer — wrong IP, or the machine is off")
+eq("failure: login", describeFailure(0, 401, ""), "Frigate wants a login; use port 5000, which has none")
+eq("failure: unknown curl error keeps curl's words", describeFailure(35, 0, "curl: (35) TLS handshake"), "TLS handshake")
+
+const known = [{camera:"rua", zone:"frente_garagem"}, {camera:"porta_frente", zone:"portao"}]
+eq("staleZones none", staleZones(parseZoneAllowlist("rua:frente_garagem, portao"), known), [])
+eq("staleZones wrong camera", staleZones(parseZoneAllowlist("Garagem:portao, rua:FRENTE_garagem"), known), ["garagem:portao"])
+eq("staleZones all, after switching Frigate", staleZones(parseZoneAllowlist("rua:frente_garagem"), []), ["rua:frente_garagem"])
+eq("failure: http on the TLS port", describeFailure(0, 400, ""), "that port expects https; try port 5000 instead")

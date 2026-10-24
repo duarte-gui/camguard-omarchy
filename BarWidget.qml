@@ -44,6 +44,8 @@ BarWidget {
   // Ui/BarWidget has no barForeground of its own — that lives on the bar.
   readonly property color barForeground: bar ? bar.barForeground : Color.foreground
   readonly property color iconColor: {
+    // A failed first attempt is a problem worth red, not a dim "still trying".
+    if (!service.online && service.lastError !== "") return bar ? bar.urgent : Color.urgent
     if (!service.everConnected) return Qt.darker(barForeground, 1.55)
     if (!service.online) return bar ? bar.urgent : Color.urgent
     return barForeground
@@ -287,11 +289,23 @@ BarWidget {
   // stores a cycled format: apply locally first so the UI reacts on the click,
   // then let the bar write the entry.
   function setSetting(key, value) {
+    var changes = ({})
+    changes[key] = value
+    setSettings(changes)
+  }
+
+  // Several keys in one write. A null removes the key, which hands it back to
+  // its fallback in Service.qml — how an rtspUrl that only ever mirrored the
+  // Frigate host goes back to following it.
+  function setSettings(changes) {
     var entry = { id: root.moduleName }
     for (var name in root.settings) {
       if (name !== "id") entry[name] = root.settings[name]
     }
-    entry[key] = value
+    for (var key in changes) {
+      if (changes[key] === null) delete entry[key]
+      else entry[key] = changes[key]
+    }
 
     root.settings = entry
     if (bar && bar.shell && typeof bar.shell.updateEntryInline === "function")
