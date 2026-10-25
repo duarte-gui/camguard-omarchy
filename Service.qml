@@ -175,6 +175,10 @@ Item {
   // just alerted" — by the time you reach for that, the event is long gone from
   // the list. This is the one that outlives it.
   property var lastAlert: null
+  // What each toast's click stands for, by serial; the click itself carries
+  // only the number (see Model.notifyExecArgv).
+  property var alertTargets: ({})
+  property int alertSerial: 0
 
   readonly property string cacheDir: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/camguard"
 
@@ -800,6 +804,9 @@ Item {
   function sendNotification(event, imagePath) {
     if (!event) return
 
+    alertSerial++
+    alertTargets = Model.rememberAlert(alertTargets, alertSerial, event, 50)
+
     toast({
       summary: Model.eventHeadline(event, zoneLabels, eventFilter),
       body: Model.eventBody(event, cameraLabel(event.camera), nowSeconds()),
@@ -807,7 +814,7 @@ Item {
       image: imagePath,
       // The click command's words, run by the daemon as data and never
       // re-parsed — which is why nothing here goes through shellQuote.
-      exec: Model.notifyExecArgv(notifyOpens, event.id, event.camera)
+      exec: Model.notifyExecArgv(alertSerial)
     })
   }
 

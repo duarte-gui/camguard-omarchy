@@ -163,7 +163,8 @@ omarchy-shell camguard pip Garage      # overlay for one camera
 omarchy-shell camguard pipToggle       # overlay on/off
 omarchy-shell camguard pipNext         # next camera in the overlay
 omarchy-shell camguard pipClose
-omarchy-shell camguard clip <event-id> # replay one event — what a toast click runs
+omarchy-shell camguard clip <event-id> # replay one event
+omarchy-shell camguard alert <n>       # what a toast click runs: its serial
 omarchy-shell camguard replay          # replay whatever alerted last
 omarchy-shell camguard live            # leave the replay for the live stream
 omarchy-shell camguard replayStatus    # "waiting <id> 12s · waiting for the clip…"
@@ -239,6 +240,9 @@ The native player needs none of that and is the default.
   instead of going through `omarchy-notification-send`. Event URLs reach curl
   the same way, through `curl -K -`, and snapshots and clips are cached under
   a hash of the event id, never under the id itself, which is a timestamp.
+  mpv gets its RTSP URL or clip on stdin (`--playlist=-`), and a toast's click
+  runs `camguard alert <n>`, a serial the widget maps back to its event — not
+  the event id or the camera's name.
 - **One poller per machine.** Omarchy builds one widget instance per monitor,
   so only the instance on the first screen polls and owns the overlay. Without
   that, a second display would mean two of every notification.

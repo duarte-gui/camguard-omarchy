@@ -178,7 +178,7 @@ BarWidget {
     // the opposite of both.
     var args = [
       "mpv",
-      service.replayClipUrl,
+      "--playlist=-",
       "--title=CamGuardPiP",
       "--wayland-app-id=camguard-pip",
       "--ontop",
@@ -195,9 +195,7 @@ BarWidget {
 
     args.push(service.pipAudio ? "--audio=yes" : "--no-audio")
 
-    mpvProcess.running = false
-    mpvProcess.command = args
-    mpvProcess.running = true
+    launchMpv(args, service.replayClipUrl)
   }
 
   function notifyReplayFailed() {
@@ -231,7 +229,7 @@ BarWidget {
     // hypr/camguard.lua can pin it without catching every other mpv window.
     var args = [
       "mpv",
-      Model.rtspUrl(service.rtspBase, stream),
+      "--playlist=-",
       "--title=CamGuardPiP",
       "--wayland-app-id=camguard-pip",
       "--ontop",
@@ -251,16 +249,32 @@ BarWidget {
       if (extra[i] !== "") args.push(extra[i])
     }
 
-    // Restarting through the same Process means closing the overlay later is a
-    // property assignment rather than hunting the window down with pkill.
+    launchMpv(args, Model.rtspUrl(service.rtspBase, stream))
+  }
+
+  // What mpv plays goes in on stdin, as a one-line playlist, never in its
+  // argv: any local account can read a process's arguments through /proc, and
+  // an RTSP URL carries the camera's name and often its password.
+  //
+  // Restarting through the same Process means closing the overlay later is a
+  // property assignment rather than hunting the window down with pkill.
+  function launchMpv(args, url) {
     mpvProcess.running = false
+    mpvProcess.url = url
     mpvProcess.command = args
+    mpvProcess.stdinEnabled = true
     mpvProcess.running = true
   }
 
   Process {
     id: mpvProcess
     running: false
+    property string url: ""
+    onStarted: {
+      write(url + "\n")
+      url = ""
+      stdinEnabled = false
+    }
     // A replay still waiting for its clip has no window yet; clearing the camera
     // here would strand it.
     onExited: if (service.player === "mpv" && !service.replayPending) service.pipCamera = ""
@@ -369,10 +383,18 @@ BarWidget {
     function pipNext(): string { return root.cyclePip() }
     function pipClose(): string { root.closePip(); return "ok" }
 
-    // Replay one event's recording — what clicking a notification runs. One
-    // argument on purpose: Quickshell fixes IPC arity, so the camera is
-    // recovered from the event itself.
+    // Replay one event's recording. One argument on purpose: Quickshell fixes
+    // IPC arity, so the camera is recovered from the event itself.
     function clip(eventId: string): string { return root.openClip(eventId, "") }
+
+    // What clicking a notification runs: the toast's serial, which stands for
+    // its event and camera, so neither appears in the click's argv.
+    function alert(serial: string): string {
+      var target = service.alertTargets[serial]
+      if (!target) return "that alert is no longer kept"
+      if (service.notifyOpens === "live" || target.id === "") return root.openPip(target.camera)
+      return root.openClip(target.id, target.camera)
+    }
 
     // Replay whatever alerted most recently, for a keybinding.
     function replay(): string {

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.duarte-gui.camguard",
   "name": "CamGuard",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "author": "duarte-gui",
   "license": "MIT",
   "description": "Frigate NVR cameras in the Omarchy bar: a live snapshot grid, a floating always-on-top PiP with the real RTSP stream, and desktop alerts filtered by zone that replay the recording when you click them.",

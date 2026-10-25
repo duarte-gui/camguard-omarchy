@@ -583,10 +583,24 @@ function shellQuote(value) {
 // hint, which runs them as-is and never re-parses them. Shell-quoting an
 // argument here would travel as literal quote characters — so nothing in this
 // vector may be passed through shellQuote.
-function notifyExecArgv(mode, eventId, camera) {
-  if (mode === "live" || !eventId)
-    return ["omarchy-shell", "-q", "camguard", "pip", String(camera || "")]
-  return ["omarchy-shell", "-q", "camguard", "clip", String(eventId)]
+//
+// The click becomes a process, and any local account can read its arguments
+// through /proc. So it carries only the toast's own serial number; the widget
+// keeps which event and camera that number stands for. An event id is the
+// time of the detection, and a camera name says where.
+function notifyExecArgv(serial) {
+  return ["omarchy-shell", "-q", "camguard", "alert", String(Math.max(0, Math.floor(Number(serial) || 0)))]
+}
+
+// The alerts a notification click can still reach, newest last: the new one
+// added under its serial, the oldest dropped past `limit`.
+function rememberAlert(targets, serial, event, limit) {
+  var next = {}
+  var keys = Object.keys(targets || {}).map(Number).sort(function(a, b) { return a - b })
+  var keep = keys.slice(Math.max(0, keys.length - Math.max(0, (limit || 50) - 1)))
+  for (var i = 0; i < keep.length; i++) next[keep[i]] = targets[keep[i]]
+  next[serial] = { id: String(event && event.id || ""), camera: String(event && event.camera || "") }
+  return next
 }
 
 // Backoff for a stream that will not start: quick retries first, then back off

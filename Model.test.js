@@ -113,14 +113,14 @@ eq("eventClipUrl", eventClipUrl("http://h:5000", "1787700603.795232-hesuzw"),
 // The notification's click action is an argv vector, never a shell string:
 // the Omarchy daemon runs the words as given, as data. A quoted argument would
 // arrive with its quotes intact.
-eq("notifyExecArgv clip", notifyExecArgv("clip", "1787700603.795232-hesuzw", "Garagem"),
-   ["omarchy-shell","-q","camguard","clip","1787700603.795232-hesuzw"])
-eq("notifyExecArgv live", notifyExecArgv("live", "1787700603.795232-hesuzw", "Garagem"),
-   ["omarchy-shell","-q","camguard","pip","Garagem"])
-eq("notifyExecArgv falls back to live without an id", notifyExecArgv("clip", "", "Garagem"),
-   ["omarchy-shell","-q","camguard","pip","Garagem"])
-eq("notifyExecArgv has no word with a space",
-   notifyExecArgv("clip", "1787700603.795232-hesuzw", "Porta da Frente").some(w => /\s/.test(w)), false)
+// It names no event and no camera — only the toast's serial.
+eq("notifyExecArgv", notifyExecArgv(7), ["omarchy-shell","-q","camguard","alert","7"])
+eq("notifyExecArgv takes only a number", notifyExecArgv("1787700603.795232-hesuzw"),
+   ["omarchy-shell","-q","camguard","alert","0"])
+eq("rememberAlert adds", rememberAlert({}, 1, { id: "e1", camera: "Garagem" }, 3),
+   { 1: { id: "e1", camera: "Garagem" } })
+eq("rememberAlert drops the oldest past the limit",
+   Object.keys(rememberAlert({ 1: {}, 2: {}, 3: {} }, 4, { id: "e4", camera: "c" }, 3)), ["2","3","4"])
 
 const clipNow = 1787700700
 eq("clipVerdict ready", clipVerdict({has_clip:true}, clipNow, 3, 180, 45), "ready")
